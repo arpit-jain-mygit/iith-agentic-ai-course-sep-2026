@@ -56,6 +56,7 @@ in practice. A small "I've seen this go wrong when..." story is worth more than 
 | [I42](#i42-multi-agent-orchestration-patterns) | Multi-agent orchestration patterns | Book · AI Engineering (DailyDoseofDS) |
 | [I43](#i43-agent-deployment-patterns) | Agent deployment patterns | Book · AI Engineering (DailyDoseofDS) |
 | [I44](#i44-mcp-in-depth-primitives-discovery-and-tool-overload) | MCP in depth: primitives, discovery and tool overload | Book · AI Engineering (DailyDoseofDS) |
+| [I45](#i45-retrieval-strategies-the-full-map) | Retrieval strategies: the full map | Extra · interview prep (consolidated) |
 
 ---
 
@@ -1431,6 +1432,151 @@ Some frameworks (for example mcp-use's server manager) do this automatically.
 prompts and watch its JSON-RPC traffic. That's the first thing to use when debugging a server. Newer
 extensions let MCP servers return small **UI widgets** inside chat clients (MCP-UI, and OpenAI's Apps
 SDK), not just text.
+
+## I45. Retrieval strategies: the full map
+
+*Typical question: "What retrieval strategies do you know, and when would you use each?"*
+
+There are many named techniques, and they're easy to mix up. The trick is to group them by **where in
+the pipeline they act**. A retrieval pipeline has four places you can improve:
+
+```text
+ documents ──▶ ① BEFORE INDEXING ──▶ index        (how chunks are made and stored)
+ question  ──▶ ② QUERY SIDE ───────▶ query(ies)   (what you search with)
+            ──▶ ③ SEARCH ──────────▶ candidates   (how you find matches)
+            ──▶ ④ AFTER SEARCH ────▶ final chunks (how you pick and order them)
+```
+
+Think of a library: ① is how the books are shelved and labelled, ② is how you phrase your request to
+the librarian, ③ is how the librarian searches, and ④ is how they pick the best few books to hand you.
+
+**The map**
+
+| Where | Strategy | One-line idea | Detail |
+|---|---|---|---|
+| ① Before indexing | Chunking (fixed, recursive, structure, semantic, LLM, AST) | cut documents along meaningful boundaries | [B13](INTERVIEW-GUIDE-1-BEGINNER.md#b13-chunking--why-split-documents), [I15](#i15-chunking-strategies-compared) |
+| | Parent–child (small-to-big) | match small chunks, return their bigger parent | [I15](#i15-chunking-strategies-compared) |
+| | **Sentence-window** | match single sentences, return the sentences around them | below |
+| | Chunk metadata | store title, section, type, date with each chunk for filtering and context | [I15](#i15-chunking-strategies-compared), [I25](#i25-inside-a-vector-database) |
+| | **Contextual retrieval** | prepend a short "where this chunk sits" note before embedding | below |
+| | Embedding model and dimension choice | the model decides what "similar" means | [I26](#i26-choosing-an-embedding-model) |
+| ② Query side | Query rewriting | fix typos, expand abbreviations, make a chat turn self-contained | [I28](#i28-a-tour-of-rag-architectures) |
+| | Multi-query / RAG-Fusion | several phrasings, search each, fuse the results | [I18](#i18-reranking-rrf-and-rag-fusion), [I28](#i28-a-tour-of-rag-architectures) |
+| | HyDE | search with a hypothetical answer instead of the question | [I28](#i28-a-tour-of-rag-architectures) |
+| | **Query decomposition** | split a compound question into sub-questions | below |
+| | **Step-back prompting** | first ask a more general question, then the specific one | below |
+| | Self-query | turn the question into search text + metadata filters | [I28](#i28-a-tour-of-rag-architectures) |
+| ③ Search | Dense (semantic) | match by meaning | [B12](INTERVIEW-GUIDE-1-BEGINNER.md#b12-embeddings-and-vector-databases), [B14](INTERVIEW-GUIDE-1-BEGINNER.md#b14-keyword-vs-semantic-search) |
+| | Sparse (BM25 keyword) | match exact words and codes | [B14](INTERVIEW-GUIDE-1-BEGINNER.md#b14-keyword-vs-semantic-search) |
+| | Hybrid + RRF | both, merged by rank | [I17](#i17-hybrid-search), [I18](#i18-reranking-rrf-and-rag-fusion) |
+| | Metadata filtering | restrict to the right subset (asset, tenant, date) first | [I25](#i25-inside-a-vector-database) |
+| | **Late interaction (ColBERT)** | compare query and document word by word, cheaply | below |
+| | Graph traversal (GraphRAG) | follow relationships between entities | [E27](INTERVIEW-GUIDE-3-EXPERT.md#e27-graph-rag-corrective-rag-agentic-rag--and-choosing-an-architecture) |
+| ④ After search | Reranking (cross-encoder or LLM) | read query and chunk together, re-order | [I18](#i18-reranking-rrf-and-rag-fusion) |
+| | **MMR / diversity** | don't fill every slot with near-duplicates | below |
+| | Context compression | keep only the relevant sentences | [I28](#i28-a-tour-of-rag-architectures) |
+| | Choosing k, split budgets per source | right amount, every source represented | [E8](INTERVIEW-GUIDE-3-EXPERT.md#e8-how-much-to-retrieve-and-when) |
+| Around the loop | Corrective / agentic retrieval | check if the results are good enough; search again if not | [E27](INTERVIEW-GUIDE-3-EXPERT.md#e27-graph-rag-corrective-rag-agentic-rag--and-choosing-an-architecture) |
+| | Multi-source routing, permission filters, recency weighting | search the right systems, only what the user may see | [E31](INTERVIEW-GUIDE-3-EXPERT.md#e31-unified-context-retrieval-across-many-sources) |
+
+The five marked in **bold** are explained below; the rest have their own topics.
+
+**MMR (Maximal Marginal Relevance): diversity in the results**
+
+Plain top-k ranking takes the k *most similar* chunks, and they're often near-copies of each other:
+three chunks from the same section say almost the same thing. MMR picks results **one at a time**. Each
+pick balances "relevant to the query" against "different from what I've already picked":
+
+```text
+next pick = argmax over remaining chunks of
+            λ · similarity(chunk, query)  −  (1 − λ) · max similarity(chunk, already picked)
+```
+
+`λ` near 1 means pure relevance; lower values push harder for variety (0.5–0.7 is common). A simpler
+version of the same idea is a **cap per document**: at most one or two chunks from any one source.
+
+*PlantGuard:* the M4 comparison (H4) found exactly this failure. For a seal-replacement question, all
+three plant-wide slots went to three chunks of the Lockout/Tagout standard, pushing out the Permit to
+Work standard the answer needed. A per-document cap is the planned fix.
+
+**Contextual retrieval: give every chunk its context before embedding**
+
+A chunk cut from the middle of a document often doesn't say what it's about. "Torque to 45 Nm in a
+star pattern" doesn't mention which machine or which part. So its embedding is vague, and a keyword
+search for "chiller fan motor" misses it.
+
+Contextual retrieval fixes this at indexing time. For each chunk, an LLM writes one or two sentences
+placing it in its document, and that note is **prepended** before embedding and keyword-indexing:
+
+```text
+[Context: From the Centrifugal Chiller manual, section 6 "Torque specifications",
+ fan-motor mounting bolts.]
+Torque to 45 Nm in a star pattern ...
+```
+
+It costs one LLM call per chunk, once at ingestion; prompt caching on the shared document text makes
+that cheap. It's especially effective combined with hybrid search and reranking.
+
+*PlantGuard:* R5 already prepends a short **header** (document title + section) to every chunk before
+embedding. That's a cheap, rule-based version of the same idea. Full contextual retrieval would replace
+the header with an LLM-written description.
+
+**Sentence-window retrieval: match small, read wide**
+
+Embed **individual sentences**, so matching is very precise. When one matches, return it with a
+**window** of surrounding sentences (say 3 before and 3 after), so the model gets enough context. It's
+a finer-grained cousin of parent–child retrieval: the "parent" is a sliding window rather than a fixed
+section. It suits long, flowing text without clear headings, such as reports or transcripts.
+
+**Query decomposition: split the question**
+
+*"Is VPW-P-00043 in stock, and what permit do I need to replace it on the chiller?"* is really two
+questions about two different documents (inventory and permits). One combined search returns a muddle
+of both. Decomposition has the LLM split the question first, retrieve for each sub-question separately,
+then answer using all the results. It's the core move behind multi-hop and adaptive RAG ([I28](#i28-a-tour-of-rag-architectures)).
+
+**Step-back prompting: ask the general question first**
+
+For a very specific question (*"Why did CHILLER-01 trip at 21.8 bar condenser pressure?"*), first
+generate a broader **step-back** question (*"What causes high condenser pressure trips in centrifugal
+chillers?"*). Retrieve for both. The general one brings in principles and fault tables; the specific
+one brings in the exact details. This helps when the exact wording matches nothing, but the underlying
+concept is well documented.
+
+**Late interaction (ColBERT): between dense search and reranking**
+
+- **Dense search** squeezes a whole chunk into **one** vector: fast, but detail gets blurred.
+- A **cross-encoder reranker** reads query and chunk together: accurate, but too slow for the whole
+  collection.
+- **ColBERT-style late interaction** keeps **one vector per token**. At search time, each query word
+  finds its best-matching word in the chunk, and those scores are summed.
+
+It's like comparing two documents word by word instead of comparing their one-line summaries. That
+gives much finer matching than single-vector search while staying fast enough for first-stage
+retrieval. The cost is storage (many vectors per chunk), though compression helps. Some vector databases
+(Qdrant, Vespa) support multi-vector retrieval.
+
+**How to choose: start from the failure you see**
+
+| You observe | Try first |
+|---|---|
+| Exact codes or IDs missed | hybrid search (BM25 + dense) |
+| Right document found but ranked low | reranking |
+| Near-duplicate chunks fill the results | MMR or a per-document cap |
+| Chunks found but meaningless out of context | contextual retrieval, parent–child, sentence-window |
+| Users phrase things differently from the documents | query rewriting, multi-query, HyDE |
+| Compound or multi-part questions | query decomposition |
+| Very specific questions with no exact match | step-back prompting |
+| Questions need filters (dates, machine, tenant) | metadata filtering, self-query |
+| Answers need connections across documents | GraphRAG |
+| Retrieved context sometimes simply isn't enough | corrective or agentic retrieval |
+
+Change **one thing at a time** and measure it on a golden set (recall@k, MRR, precision; [I19](#i19-measuring-retrieval-and-rag-quality)), the way
+PlantGuard's H4 compares dense, hybrid and rerank.
+
+**One line for interviews:** *"I group retrieval strategies by where they act: how documents are chunked
+and indexed, how the query is reformulated, how search runs, and how results are reranked and
+diversified. Then I pick by the failure I measure, not by what's fashionable."*
 
 ---
 
