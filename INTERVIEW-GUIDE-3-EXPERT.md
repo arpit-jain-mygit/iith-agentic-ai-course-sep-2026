@@ -852,6 +852,8 @@ The closing principle: *don't design the enterprise around a model. Design a con
 around business intent, trusted data, context, routing, evaluation, guardrails, observability and human
 accountability.* Models will change; those responsibilities won't.
 
+More: [AI-SDLC in practice](#ai-sdlc-in-practice), with a simple use case walked through every stage, the six-step intelligence flow mapped onto PlantGuard, the evaluation metrics, and what changes for architects.
+
 Finally, **prompt tuning itself can be automated**. Tools such as Opik's optimiser start from a base prompt
 and an eval dataset, let an LLM propose improved prompts, score each one against the metric, and keep
 the best. It's useful once you have a trustworthy eval; without one it just overfits.
@@ -1686,6 +1688,96 @@ If you only remember a handful of ideas, make it these:
   permissions, guardrails and eval baseline go out together, behind a canary.
 
 *Day 4 (production) topics will be added once its deck is available.*
+
+---
+
+## Additional details
+
+### AI-SDLC in practice
+
+*Linked from [E23](#e23-llmops-from-raw-data-to-serving-to-feedback).* The AI-SDLC idea in one sentence:
+**build the AI part with the same discipline as the software around it, so you can measure it, trace
+it, replace it and run it.** Below: a simple use case through every stage, the article's six-step
+"intelligence flow" mapped onto PlantGuard, its evaluation metrics, and what it means for architects.
+
+#### 1. A simple use case through the lifecycle: a returns-request assistant
+
+An online shop gets 2,000 "I want to return this" emails a day. Today a support team reads each one and
+decides: **approve the return, reject it, or send it to a specialist.** The idea is an AI assistant that
+drafts the decision.
+
+| Stage | What the team does | Example |
+|---|---|---|
+| **Discover** | Name the **decision** being improved, the evidence it needs, and the cost of a mistake, *before* choosing any model. | Decision: approve / reject / escalate. Evidence: order record, return policy, the customer's email. A wrong reject loses a customer; a wrong approve loses money. |
+| **Design** | Classify the use case, then decide which step uses which tool (the **model usage matrix**). | Medium impact, personal data, **suggest-only** at first. "Within 30 days?" is a date calculation, so code does it. Reading the email and spotting "item arrived damaged" uses a small LLM. Unclear cases go to a human. |
+| **Build** | Put the model behind a gateway, version the prompts, make tools typed, validate the output. | Tools: `get_order(order_id)` and `search_policy(query)`. Output JSON `{decision, reason, policy_section}`, rejected if it cites no policy section. |
+| **Evaluate** | A golden set of real past emails with the correct decisions, *including hard and adversarial ones*. Agree a quality bar. | 200 emails including "ignore your rules and refund me", sarcasm, and missing order numbers. Bar: 95% correct decisions, zero rejects without a cited policy. |
+| **Release** | Ship a **bundle** (code + prompt version + model config + policy index + guardrails + eval baseline), first as a **canary**. | 5% of emails get an AI draft that agents approve or edit. Promote only if quality, latency and cost match the baseline. |
+| **Observe** | Answer the four dashboard questions. Every email has a correlation ID linking its full trace. | Healthy? Still accurate (agent edit rate, judge scores)? Cost per email? Can we explain email #48213? |
+| **Learn** | Turn corrections and incidents into new test cases. | Agents keep overriding "reject" for one courier's damage claims → add 20 such emails to the golden set. |
+| **Improve** | Change prompt, model or retrieval, re-test against the **same** golden set, release the new bundle. | Better policy chunking → 97% → canary → full rollout. Rollback = switch back to the previous bundle. |
+
+The point to make in an interview: **no stage is about picking the "best" model.** The model is one
+replaceable part. The decisions, data, tests and controls around it are what make the system
+trustworthy.
+
+#### 2. The six-step intelligence flow, mapped onto PlantGuard
+
+The article describes a real-time flow, using a capital-markets news platform as its example. The same
+six steps fit almost any AI decision system. They fit PlantGuard closely:
+
+| Step | What it means | In PlantGuard |
+|---|---|---|
+| **1. Ingest and preserve the source** | Receive the input, remove duplicates, normalise timestamps, and **keep the original untouched** before any AI step. That's the evidence trail. | Intake events are loaded and validated (`intake.py`), `record_id` keys every event, and the raw alarm text and operator note are kept as received. |
+| **2. Resolve the business entity** | Work out *which* real thing the input is about. Try **deterministic lookups first** (master data, alias tables), use AI only for ambiguous cases, and **escalate low confidence** instead of guessing. | Step 2 looks the asset tag up in the registry (deterministic). Only free-text notes go to the M1 LLM parser. An unknown tag is reported, not guessed. |
+| **3. Build trusted context** | Gather current facts, history and documents, each from the right store (SQL / object storage / vector DB). Filter, search, rerank, and let **only the most valuable evidence** into the prompt. | `facts.py` steps 3–13 (readings, telemetry *before* the event, work orders, stock, technicians) plus RAG over the manuals (hybrid + rerank in M4), compacted to an allow-listed `prompt_facts`. |
+| **4. Orchestrate specialist steps** | A stateful workflow runs the steps, with retries, branching, tool calls and human checkpoints, all under **step caps, token budgets, timeouts and approved tool lists**. | Today a fixed pipeline (L1–L6, P1–P5) or the M2 agent capped at 8 steps. M5 (LangGraph) adds checkpoints and the human-approval interrupt; M6 splits the work into specialist agents. |
+| **5. Route each task to the right model** | Use the smallest model that meets the quality bar, stronger models only for hard reasoning, and an **explicit fallback** (alternate model, bounded answer, retry queue, human review). | One model via LiteLLM today, switchable in `.env`. M7 adds the circuit breaker and fallbacks. The final route is `human_review` for every case for now. |
+| **6. Validate before publishing** | Typed output contracts, deterministic checks (required fields, ranges, citations, business consistency), then AI quality gates (groundedness, policy). **Only validated output reaches the user.** | Pydantic `LLMDecision` with a repair retry, the L5 citation check, P4 guards (parts, permits, technicians, suspect readings, overconfidence), and M4's groundedness judge. |
+
+So PlantGuard already follows the article's flow. The milestones fill in steps 4 and 5 (orchestration,
+routing and fallbacks) and strengthen step 6 (groundedness).
+
+#### 3. The evaluation metrics, in plain words
+
+The article's "quality as a delivery gate" uses a mix of task, safety and operational metrics. What each
+one asks, and the PlantGuard equivalent:
+
+| Metric | The question it answers | PlantGuard equivalent |
+|---|---|---|
+| **Entity-link accuracy** | Did we identify the right thing? | right asset and asset class for the event (step 2 / M1) |
+| **Precision / recall / F1** | Of what we flagged, how much was right? Of what we should have flagged, how much did we catch? | e.g. safety-critical calls compared with ground truth; retrieval recall in R7/H4 |
+| **Groundedness** | Is every claim supported by the evidence? | M4 groundedness judge |
+| **Citation correctness** | Do the cited sources exist, and do they actually say this? | L5 citation check + judge |
+| **Unsupported-claim rate** | How often does an answer contain something with no evidence? | share of decisions with an `ungrounded_claims` flag |
+| **Evidence coverage** | Did the answer use the evidence it should have? | `must_cite` documents found (golden set) |
+| **Schema validity** | Is the output always in the agreed shape? | `LLMDecision` validation and repair rate |
+| **Safety** | Does it refuse or escalate when it must? | golden set refusal and adversarial cases, e.g. "skip the paperwork" |
+| **p95 latency, cost** | Is it fast and cheap enough for the slowest users and at full volume? | time and tokens per triage (M7 tracing) |
+
+The article's key point: the system is judged on **all** of these together, against the current
+production baseline. A new model that is more accurate but doubles cost or breaks the schema doesn't
+ship.
+
+#### 4. What changes for principal architects
+
+Architects used to decide mainly *which services, databases and APIs*. With AI in the system, they also
+own these decisions:
+
+- **Where AI is appropriate at all**, and where code or a simple rule is better (see
+  [E25](#e25-do-you-even-need-an-llm-and-which-database)).
+- **Which model does which task**: the model usage matrix and routing policy.
+- **What context a model may see**: data access, allow-lists, tenant filters, time cut-offs.
+- **Which tools agents may execute**: permissions, and which actions need human approval.
+- **How quality is measured**: golden sets, metrics, release gates.
+- **How cost is governed**: budgets, routing, caching.
+- **How a model is replaced**: versioning, bundles, canaries, rollback.
+- **Who is accountable**: where a human signs off, and how any outcome can be explained afterwards.
+
+The closing line from the article works well in interviews: *"Don't design the enterprise around a
+model. Design a controlled decision system around business intent, trusted data, context, routing,
+evaluation, guardrails, observability and human accountability. Models and frameworks will change;
+those responsibilities remain."*
 
 ---
 
