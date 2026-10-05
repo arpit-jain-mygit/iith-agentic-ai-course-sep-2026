@@ -317,7 +317,7 @@ There's also a neat way to see how memory relates to RAG:
 - **Agent memory** is *read-write*: the agent also **writes** what it learned, so next time it knows.
 
 That last step is what lets an agent improve across sessions without retraining the model. Memory is a
-system-design problem, not a property of the model.
+system-design problem, not a property of the model. Explained with a story, and which one PlantGuard is: [RAG vs agentic RAG vs agent memory](#rag-vs-agentic-rag-vs-agent-memory).
 
 ## B11. RAG — Retrieval-Augmented Generation
 
@@ -1198,6 +1198,75 @@ machine.
 | Episodic | "CHILLER-01 HP_TRIP on 11 Feb → condenser cleaned, resolved" | no (work orders are plant records, not copilot memory) | memory store, by asset + time |
 | Semantic | "CHILLER-01 trips are mostly condenser fouling in summer" | no | consolidated facts per asset |
 | Procedural | "check sensors first when note and readings disagree" | partly (system prompt + RAG procedures) | reviewed lessons |
+
+### RAG vs agentic RAG vs agent memory
+
+*Linked from [B10](#b10-the-four-kinds-of-agent-memory).* The three differ on two questions: **who
+decides when to look something up**, and **can the system save anything for later?**
+
+**The story: the same chiller trips twice, in February and again in May.** Watch what each approach
+knows in May.
+
+**1. RAG**
+
+- **February:** before the LLM starts, *our code* fetches the chiller manual pages and gives them to the
+  LLM, which answers.
+- **May:** exactly the same. The code fetches the manual pages, and the LLM answers **from scratch**.
+- **In May it knows:** only the manual. It has no idea this machine tripped in February.
+
+**2. Agentic RAG**
+
+- **February:** this time the *LLM itself* decides to open the manual ("let me look up high-pressure
+  trips"), and it can look a second time if the first look wasn't enough. Then it answers.
+- **May:** again from scratch. It opens the manual again.
+- **In May it knows:** still only the manual. It has no idea about February.
+
+The **only** difference from RAG is *who opens the manual*. In RAG our code does it, once. In agentic
+RAG the LLM does it, as often as it likes. Both only read the manual; neither writes anything.
+
+**3. Agent memory**
+
+- **February:** the LLM answers. Then it **writes a note**: *"Feb: CHILLER-01 tripped, cause was a dirty
+  condenser, cleaning fixed it."*
+- **May:** before answering, it **reads its notes** and finds the February one: *"This happened before,
+  and last time it was the condenser."*
+- **In May it knows:** the manual **plus what happened in February**.
+
+The difference here is that it can **write things down and read them later**, so each event can help
+the next one.
+
+| | Who looks things up? | Does May know about February? |
+|---|---|---|
+| RAG | our code, once | no |
+| Agentic RAG | the LLM, as often as it wants | no |
+| Agent memory | the LLM | **yes, it wrote a note** |
+
+**How this links to the four memory types:**
+
+- RAG and agentic RAG just bring manual pages into **working memory** (the context) for the current
+  event.
+- Agent memory is where the long-term types live:
+  - the February note is **episodic** memory;
+  - "chiller trips are usually the condenser" would be **semantic** memory;
+  - "check the condenser first" would be **procedural** memory.
+
+**Which one is PlantGuard?** It has two modes today, and neither has memory yet:
+
+| PlantGuard mode | Command | Type | Why |
+|---|---|---|---|
+| **Main triage pipeline** (default) | `llm_step.py` / `decide.py` | **1. RAG** | Our code (step L2, `retrieve()`) fetches 6 manual sections **once**, before the LLM is called. The LLM can't ask for more. |
+| **M2 agent** | `llm_step.py --agent` | **2. Agentic RAG** | The LLM decides itself when to call the `search_manuals` tool, what to search for, and how many times. |
+| **Agent memory** | — | **3. Not yet** | Nothing is written down after a triage, so the May event knows nothing about February. Milestone **M3** adds this. |
+
+One thing can look like memory but isn't. Step 9 in `facts.py` reads the machine's **past work orders**,
+so PlantGuard *does* see "the condenser was cleaned in February". That's the **plant's own records**,
+read from a file the plant maintains; PlantGuard never writes to it. Agent memory (M3) would be
+PlantGuard keeping **its own notes**: what it recommended, whether the supervisor accepted it, and what
+the fix turned out to be.
+
+**One line for interviews:** *"RAG reads once, chosen by code. Agentic RAG reads on demand, chosen by the
+agent. Agent memory reads and writes, so the system learns from its own past. PlantGuard today is RAG
+(default) or agentic RAG (`--agent`); M3 adds memory."*
 
 ---
 
