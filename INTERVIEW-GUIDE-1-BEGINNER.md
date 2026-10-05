@@ -19,13 +19,13 @@ where it fits best:
 
 - the IITH Applied AI course decks (Days 1–3);
 - interview infographics and posts (caches, cost, RAG architectures, vector DBs, guardrails, LLMOps,
-  fine-tuning, data engineering and SQL);
+  fine-tuning) and a list of commonly asked GenAI interview questions;
 - *System Design for the LLM Era* (Sampriti Mitra): production patterns and four case studies;
 - *AI Engineering: System Design Patterns for LLMs, RAG and Agents* (DailyDoseofDS);
 - the article *AI-SDLC: Engineering Intelligence, Not Just Software*.
 
-**Numbering.** **B / I / E** are AI topics at each level; **D** topics are a data-engineering and SQL
-track at the end of each part. PlantGuard, our maintenance copilot from the capstone, appears as an
+**Numbering.** **B / I / E** mark the level. Each part ends with **common interview questions** at
+that level: short spoken answers that link back to the full topics. PlantGuard, our maintenance copilot from the capstone, appears as an
 example where it fits; elsewhere the examples are simple hypothetical ones.
 
 ---
@@ -64,10 +64,6 @@ example where it fits; elsewhere the examples are simple hypothetical ones.
 | [B28](#b28-agent-skills--and-how-mcp-rag-and-skills-differ) | Agent Skills — and how MCP, RAG and Skills differ | Extra · MCP vs RAG vs Skills + books |
 | [B29](#b29-ai-vs-ml-vs-deep-learning-vs-genai-llms-vs-slms) | AI vs ML vs deep learning vs GenAI; LLMs vs SLMs | Book · System Design for the LLM Era |
 | [B30](#b30-how-an-llm-is-built-and-trained) | How an LLM is built and trained | Book · AI Engineering (DailyDoseofDS) |
-| [D1](#d1-etl-vs-elt) | ETL vs ELT | Extra · Data engineer Qs |
-| [D2](#d2-data-warehouse-vs-data-lake-and-lakehouse) | Data warehouse vs data lake (and lakehouse) | Extra · Data engineer Qs |
-| [D3](#d3-star-schema-vs-snowflake-schema) | Star schema vs snowflake schema | Extra · Data engineer Qs |
-| [D4](#d4-window-functions--the-inventory-stock-level-question) | Window functions — the inventory stock-level question | Extra · SQL inventory post |
 
 ---
 
@@ -768,143 +764,75 @@ fine-tuning fits in ([E30](INTERVIEW-GUIDE-3-EXPERT.md#e30-reinforcement-fine-tu
 
 ---
 
-# 🟢 Data engineering and SQL track
+## Common interview questions at this level
 
-## D1. ETL vs ELT
+These are frequently asked "real-world" questions. Each answer is the short version you'd say out loud;
+the links go to the full explanation.
 
-Both describe moving data from source systems (apps, databases, sensors) into an analytics store. The
-difference is **where the transformation happens**.
+### What is the difference between RAG, fine-tuning and prompt engineering?
 
-- **ETL — Extract, Transform, Load.** Data is cleaned and reshaped *before* loading, often on a separate
-  processing server. This was the classic pattern when warehouse storage and compute were expensive, so
-  you loaded only tidy, final data.
-- **ELT — Extract, Load, Transform.** Raw data is loaded first, then transformed *inside* the warehouse
-  or lakehouse using its own compute (SQL, Spark, dbt). This became the norm with cheap cloud storage
-  and powerful engines like Snowflake, BigQuery and Databricks.
+All three adapt a general model to your task, at different layers:
 
-Why ELT is popular now: you keep the raw data, so if a business rule changes you can re-transform
-history without re-extracting it. Transformations are just SQL that analysts can read and version. And
-loading is fast and simple.
+- **Prompt engineering** changes the **input**: clearer instructions, examples, format. It's instant
+  and free to change, so always start here ([B4](#b4-what-goes-into-a-prompt), [B23](#b23-zero-shot-vs-few-shot-prompting)).
+- **RAG** gives the model **knowledge** at question time by retrieving relevant documents into the
+  prompt. It suits private or changing data, and answers can cite sources ([B11](#b11-rag--retrieval-augmented-generation)).
+- **Fine-tuning** changes the model's **weights** to change its **behaviour**: style, format,
+  vocabulary, or a narrow task done cheaply ([B24](#b24-fine-tuning-in-plain-words)).
 
-When ETL still makes sense: when you **must not** store raw data (for example, personal data that has
-to be masked before it lands), or when the target is a system with little compute of its own.
+One line: *prompting tells it what to do, RAG tells it what to know, fine-tuning changes how it
+behaves.* They combine: many production systems use a good prompt plus RAG, and add fine-tuning only
+when behaviour still isn't right.
 
-Hypothetical example: a factory streams raw sensor readings into a lake every minute (load), then a
-nightly SQL job turns them into hourly averages per machine (transform). That's ELT.
+### What are AI agents, and how do they differ from traditional workflows?
 
-## D2. Data warehouse vs data lake (and lakehouse)
+A **traditional workflow** (or a fixed LLM chain) follows a path written in advance: step A, then B,
+then C, with every branch coded by a developer. It's predictable, testable and cheap.
 
-- A **data warehouse** stores **structured**, cleaned data in tables with a fixed schema, optimised for
-  fast SQL analytics and BI dashboards. Schema is applied when data is written (*schema-on-write*).
-  Examples: Snowflake, BigQuery, Redshift, Synapse.
-- A **data lake** stores **any** data in its raw form (CSV, JSON, logs, images, Parquet) cheaply in
-  object storage such as S3 or ADLS. Schema is applied when you read it (*schema-on-read*). It's
-  flexible and cheap, but without discipline it becomes a "data swamp" that nobody trusts.
-- A **lakehouse** combines the two: data stays in cheap open files in the lake, but a table format
-  (Delta Lake, Apache Iceberg, Apache Hudi) adds warehouse features on top: ACID transactions, schema
-  enforcement, time travel and fast SQL. Databricks is the best-known example.
+An **agent** is given a goal and tools and **decides the steps itself** at runtime: what to look up,
+which tool to call, when it's done ([B6](#b6-what-an-ai-agent-is), [B9](#b9-the-react-loop)). It handles open-ended or unpredictable tasks, but costs
+more, is less predictable, and needs limits, validation and monitoring.
 
-A common pattern on top of a lake or lakehouse is the **medallion architecture**:
+The honest interview answer is that it's a **spectrum, not a choice** (the five levels of agency in
+[B6](#b6-what-an-ai-agent-is)). Many good systems are mostly workflow with an agentic step where flexibility is genuinely needed.
+Rule of thumb: *if you can draw the flowchart, build a workflow; if you can't, consider an agent* ([E13](INTERVIEW-GUIDE-3-EXPERT.md#e13-when-a-graph-or-extra-agents-is-overkill)).
 
-- **bronze** — raw data as it arrived;
-- **silver** — cleaned and conformed;
-- **gold** — business-level aggregates ready for reports.
+### How do vector databases work in RAG systems?
 
-Simple way to say it in an interview: *a warehouse is a tidy, organised library; a lake is a storage
-unit where you keep everything; a lakehouse puts a library catalogue on top of the storage unit.*
+1. Documents are split into chunks ([B13](#b13-chunking--why-split-documents)).
+2. Each chunk is turned into an embedding vector ([B12](#b12-embeddings-and-vector-databases)).
+3. The vector database stores the vectors with their text and metadata, and builds an **approximate
+   nearest-neighbour index** (usually HNSW) so it can find close vectors quickly among millions.
+4. At question time the query is embedded with the same model, the database returns the top-k closest
+   chunks (optionally filtered by metadata such as tenant, date or document type), and those chunks go
+   into the prompt.
 
-## D3. Star schema vs snowflake schema
+The internals (similarity metrics, HNSW vs IVF vs PQ, filtering) are in [I25](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i25-inside-a-vector-database), and how to choose a
+database is in [I27](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i27-choosing-a-vector-database).
 
-Both organise warehouse tables into **facts** and **dimensions**:
+### What is the role of embeddings in RAG?
 
-- A **fact table** holds the events or measurements you analyse: sales, sensor readings, work orders.
-  It's long and narrow: keys plus numbers.
-- **Dimension tables** hold descriptive context: product, store, date, machine, customer.
+Embeddings are what make **meaning searchable**. They map text to vectors so that similar meanings are
+close together, which lets retrieval find "unit tripped" when the user typed "machine cut out" ([B12](#b12-embeddings-and-vector-databases)). In
+RAG they're used twice: once to index every chunk, and once per query, with the **same model** both
+times.
 
-In a **star schema**, each dimension is a single, flat (denormalised) table joined directly to the fact
-table. Draw it and it looks like a star. Queries need few joins, so they're simple and fast, which is
-why BI tools love it. The cost is some repeated data (each product row repeats its category name).
+Three practical points:
 
-In a **snowflake schema**, dimensions are **normalised** into sub-tables: product → category →
-department, each its own table. That's less duplication and easier to keep consistent, but queries need
-more joins and are harder to write.
+- The embedding model's quality on *your* domain largely decides retrieval quality ([I26](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i26-choosing-an-embedding-model)).
+- Embeddings are weak on exact codes and IDs, so they're often paired with keyword search ([B14](#b14-keyword-vs-semantic-search), [I17](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i17-hybrid-search)).
+- Changing the embedding model means re-embedding everything ([E22](INTERVIEW-GUIDE-3-EXPERT.md#e22-changing-the-embedding-model-with-zero-downtime)).
 
-Hypothetical example: `fact_downtime(machine_key, date_key, minutes_lost, cost)` with dimensions
-`dim_machine` and `dim_date`. In a star, `dim_machine` includes `plant_name` and `machine_class`
-directly; in a snowflake, `dim_machine` points to `dim_plant`.
+### What is MCP, and why is it important?
 
-The usual interview answer: *star for analytics speed and simplicity, which is the common default;
-snowflake when dimensions are huge or change often and storage or consistency matters more.*
+The **Model Context Protocol** is an open standard for connecting AI applications to tools and data. A
+system is wrapped once as an **MCP server** (exposing tools, resources and prompts), and any
+MCP-compatible agent can discover and use it ([B20](#b20-mcp-and-a2a-in-one-picture)).
 
-## D4. Window functions — the inventory stock-level question
-
-A favourite SQL interview problem goes like this: *"For each product at each store, say whether the
-stock is HIGH, LOW or NORMAL compared with that product's average stock across all stores."*
-
-The trap is reaching for `GROUP BY`. `GROUP BY product_id` gives you the average, but it **collapses**
-the rows, so you lose the individual store rows you need to compare against it.
-
-The tool you need is a **window function** with `PARTITION BY`. It computes an aggregate over a group
-of rows but **keeps every row**: *like GROUP BY, but you keep the details.*
-
-Sample table `inventory`:
-
-| store_id | product_id | quantity |
-|---|---|---|
-| S1 | P1 | 50 |
-| S2 | P1 | 20 |
-| S3 | P1 | 32 |
-| S1 | P2 | 8 |
-| S2 | P2 | 12 |
-
-```sql
-WITH stock AS (
-    SELECT
-        store_id,
-        product_id,
-        quantity,
-        AVG(quantity) OVER (PARTITION BY product_id) AS avg_qty
-    FROM inventory
-)
-SELECT
-    store_id,
-    product_id,
-    quantity,
-    ROUND(avg_qty, 1) AS avg_qty,
-    CASE
-        WHEN quantity > avg_qty + 10 THEN 'HIGH'
-        WHEN quantity < avg_qty - 10 THEN 'LOW'
-        ELSE 'NORMAL'
-    END AS stock_level
-FROM stock
-ORDER BY product_id, store_id;
-```
-
-Result:
-
-| store_id | product_id | quantity | avg_qty | stock_level |
-|---|---|---|---|---|
-| S1 | P1 | 50 | 34.0 | HIGH |
-| S2 | P1 | 20 | 34.0 | LOW |
-| S3 | P1 | 32 | 34.0 | NORMAL |
-| S1 | P2 | 8 | 10.0 | NORMAL |
-| S2 | P2 | 12 | 10.0 | NORMAL |
-
-How to explain it:
-
-- `AVG(quantity) OVER (PARTITION BY product_id)` computes P1's average (34) and writes it on **every**
-  P1 row, without merging them.
-- The **CTE** (`WITH stock AS ...`) is there because you can't use a window function directly in a
-  `WHERE` or a later `CASE` at the same level. Compute it first, then use it.
-- The threshold of 10 units is a business rule; a percentage (say ±30% of the average) often makes more
-  sense when products have very different volumes.
-
-Likely follow-ups, all using the same window idea:
-
-- **Rank stores by stock within each product:** `RANK() OVER (PARTITION BY product_id ORDER BY quantity DESC)`.
-- **Running total of stock movements over time:** `SUM(qty_change) OVER (PARTITION BY product_id ORDER BY movement_date)`.
-- **Change since the last count:** `quantity - LAG(quantity) OVER (PARTITION BY store_id, product_id ORDER BY count_date)`.
-- **Flag items below their reorder point** by joining a `products` table with `reorder_level`.
+It matters because it turns the N agents × M tools integration problem into N + M. Teams stop
+rewriting the same connectors, tools become reusable across apps and vendors, and capabilities are
+discovered at runtime rather than hard-coded ([I22](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i22-how-mcp-works-when-to-use-a2a), [I44](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i44-mcp-in-depth-primitives-discovery-and-tool-overload)). The flip side is that every server is part of
+your attack surface, so MCP needs governance and security controls ([E15](INTERVIEW-GUIDE-3-EXPERT.md#e15-protocol-strategy-and-mcp-security)).
 
 ---
 

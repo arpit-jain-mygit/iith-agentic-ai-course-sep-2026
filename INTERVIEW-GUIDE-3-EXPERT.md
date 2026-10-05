@@ -48,9 +48,6 @@ Topics [E32](#e32-case-study-an-ai-coding-assistant-cursor--copilot-style)–[E3
 | [E33](#e33-case-study-an-adaptive-learning-platform-duolingo-style) | Case study: an adaptive learning platform (Duolingo style) | Book · System Design for the LLM Era |
 | [E34](#e34-case-study-ai-powered-search-for-e-commerce) | Case study: AI-powered search for e-commerce | Book · System Design for the LLM Era |
 | [E35](#e35-case-study-a-customer-support-agent-with-graphrag) | Case study: a customer-support agent with GraphRAG | Book · System Design for the LLM Era |
-| [D10](#d10-spark-performance-tuning) | Spark performance tuning | Extra · Data engineer Qs |
-| [D11](#d11-data-skew) | Data skew | Extra · Data engineer Qs |
-| [D12](#d12-pipeline-monitoring-and-troubleshooting) | Pipeline monitoring and troubleshooting | Extra · Data engineer Qs |
 
 ---
 
@@ -1475,109 +1472,186 @@ impact and the mitigation:
 
 ---
 
-# 🔴 Data engineering and SQL track
+## Common interview questions at this level
 
-## D10. Spark performance tuning
+Short, interview-ready answers to frequently asked senior questions, with links to the full topics.
 
-*Typical question: "A Spark job that used to take 20 minutes now takes 2 hours. How do you tune it?"*
+### Explain the end-to-end architecture of a GenAI application.
 
-Start with the **Spark UI**, not guesses: which **stage** is slow, how many tasks it has, whether some
-tasks take far longer than others (skew, [D11](#d11-data-skew)), how much data is **shuffled**, and whether there's
-**spill** to disk.
+Walk it as a request flows through:
 
-The main levers:
+1. **Client and API gateway** — auth, rate limits, streaming connection.
+2. **Orchestrator** — receives the request, loads conversation state, classifies intent and routes:
+   cache, FAQ, RAG or agent ([E35](#e35-case-study-a-customer-support-agent-with-graphrag)).
+3. **Context assembly** — retrieval (hybrid search, filters, reranking) from a vector store and other
+   sources, plus memory and tool results, compacted to fit ([I3](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i3-prompt-engineering-vs-context-engineering), [E1](#e1-context-engineering-at-scale)).
+4. **Model gateway** — chooses the model, handles retries, fallbacks, circuit breakers, caching and cost
+   tracking ([I29](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i29-ai-gateway), [I10](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i10-retries-backoff-and-circuit-breakers)).
+5. **Guardrails and validation** — input checks before the call; schema, citation and policy checks
+   after ([B25](INTERVIEW-GUIDE-1-BEGINNER.md#b25-guardrails), [I4](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i4-valid-json-isnt-a-correct-answer)).
+6. **Response** — streamed to the user; consequential actions go through human approval ([I41](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i41-designing-for-low-latency), [B18](INTERVIEW-GUIDE-1-BEGINNER.md#b18-checkpoints-and-human-in-the-loop)).
 
-- **Reduce shuffles.** Joins, `groupBy` and `distinct` move data across the network, and they're
-  usually the most expensive part.
-  - **Broadcast joins**: when one side is small (say under a few hundred MB), send it to every executor
-    instead of shuffling both sides (`broadcast(df)`).
-  - Filter and select columns **before** joins and aggregations.
-- **Partitioning.**
-  - Too few partitions and each task is huge and spills to disk; too many and you pay scheduling
-    overhead.
-  - Tune `spark.sql.shuffle.partitions`, or let **Adaptive Query Execution (AQE)** coalesce partitions
-    automatically.
-  - Use `repartition` (full shuffle) to spread data or `coalesce` (no shuffle) to reduce partitions
-    before writing.
-- **Read less data.** Columnar formats (Parquet, Delta), **partition pruning** (filter on partition
-  columns), **predicate pushdown**, and file layout optimisation (Z-ordering or liquid clustering in
-  Delta) so queries skip irrelevant files.
-- **Fix the small-files problem.** Thousands of tiny files slow everything down; compact them
-  (`OPTIMIZE` in Delta, auto-compaction).
-- **Cache wisely.** `cache()` or `persist()` a DataFrame only if it's reused several times, and
-  unpersist it afterwards.
-- **Avoid Python UDFs** where built-in functions exist. UDFs block optimisations and add serialisation
-  overhead; use built-in SQL functions, or pandas UDFs if needed.
-- **Right-size the cluster**: executor memory and cores, and autoscaling. Memory errors and spill often
-  mean partitions are too large rather than the cluster too small.
+Behind it all: an **offline ingestion pipeline** (parse, chunk, embed, index, triggered by events) and
+**observability and evaluation** (traces, metrics, judges, feedback, golden sets in CI). [E16](#e16-system-design-the-interview-playbook-applied-to-an-agentic-copilot) has the full
+interview playbook, and [E32](#e32-case-study-an-ai-coding-assistant-cursor--copilot-style)–[E35](#e35-case-study-a-customer-support-agent-with-graphrag) apply it to real products.
 
-For the "used to be fast" story, also check **what changed**: data volume growth, a new skewed key, a
-join that stopped being broadcast because the small table grew, or many small files accumulating.
+### How would you design a multi-agent system for enterprise automation?
 
-## D11. Data skew
+Start by challenging the premise: build a **single-agent baseline** and split only where there's a real
+reason, such as different permissions, independent verification or parallel work ([B19](INTERVIEW-GUIDE-1-BEGINNER.md#b19-one-agent-or-many), [E5](#e5-multi-agent-systems-and-why-they-fail), [E13](#e13-when-a-graph-or-extra-agents-is-overkill)). Then:
 
-**Data skew** means data isn't evenly spread across partitions. One key has far more rows than the
-others, so the task processing that key takes much longer while all the others sit idle. In the Spark
-UI it shows as most tasks finishing in seconds and one or two taking many minutes.
+- **Pick the topology** that fits the process: usually a **supervisor or hierarchical** pattern for
+  enterprise workflows, with sequential or parallel sub-flows ([I42](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i42-multi-agent-orchestration-patterns)).
+- **Typed handoffs and shared state** in a durable graph engine with checkpoints, so runs survive
+  crashes and humans can approve mid-flow ([I20](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i20-langgraph-state-checkpoints-interrupts), [E11](#e11-loops-that-survive-crashes-durable-execution)).
+- **Least-privilege tools per agent** via MCP; cross-team agents over A2A ([I22](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i22-how-mcp-works-when-to-use-a2a), [E15](#e15-protocol-strategy-and-mcp-security)).
+- **Budgets and caps** on steps, handoffs, tokens and fan-out ([I21](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i21-supervisor-routing-and-loop-caps), [E14](#e14-dynamic-topologies-and-runaway-fan-out)).
+- **Human-in-the-loop** for irreversible actions ([E4](#e4-where-safety-controls-belong)).
+- **Evaluate at four levels**: each agent, routing, orchestration and end-to-end ([E21](#e21-evaluating-a-multi-agent-system)).
+- **Observability**: one trace across all agents ([B27](INTERVIEW-GUIDE-1-BEGINNER.md#b27-observability)).
 
-Hypothetical example: joining sensor readings to machines on `machine_id`, where one machine streams
-every second and others every hour. Or `customer_id` where a "guest" or NULL value covers 40% of
-orders.
+Roll out in shadow mode first, then automate low-risk cases.
 
-Fixes:
+### How would you handle sensitive or confidential data in GenAI systems?
 
-- **Adaptive Query Execution's skew-join handling** (`spark.sql.adaptive.skewJoin.enabled`) can split
-  oversized partitions automatically. Try this first on modern Spark.
-- **Broadcast the smaller table**, so the skewed key never needs to be shuffled.
-- **Salting** — add a random suffix (0–9, say) to the skewed key on the big side, and duplicate the
-  matching rows on the small side for each suffix. The hot key is then spread across 10 partitions.
-  Aggregate in two steps if needed (per salted key, then combine).
-- **Handle the hot or NULL keys separately**: filter them out, process them on their own (or drop them
-  if meaningless), and union the result back.
-- **Pre-aggregate** before the join, to shrink the skewed side.
+- **Classify first:** what's sensitive, and where may it legally go? That decides **public API vs
+  private cloud endpoint vs self-hosted model** ([I32](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i32-quantization-and-hosted-apis-vs-open-source-models)).
+- **Minimise:** send only the fields the task needs.
+- **Mask PII and secrets** before prompts and logs.
+- **Enforce access control at retrieval** with tenant and permission filters on every query, never
+  relying on the model to "not mention" things ([E28](#e28-llm-security-beyond-prompt-injection--and-privacy-patterns)).
+- **Zero-retention agreements** with providers; **ephemeral processing** and redacted logs on your side.
+- **Encryption** in transit and at rest; vectors are protected too, because embeddings can leak text.
+- Keep **audit trails**, retention limits and deletion support for privacy laws, and govern long-term
+  memory carefully ([E6](#e6-memory-going-bad-governance)).
 
-A good interview point: *always confirm skew in the UI first (task duration distribution and per-task
-shuffle size), and look at the key distribution with a quick `groupBy(key).count()`.*
+### How would you evaluate whether an AI agent is performing correctly?
 
-## D12. Pipeline monitoring and troubleshooting
+Judge the **outcome** and the **path**:
 
-*Typical question: "How do you monitor data pipelines, and walk me through troubleshooting a failure?"*
+- **Task success** on a golden set of realistic tasks, scored with deterministic checks where possible
+  (tests pass, correct record updated) and weighted rubrics or judges otherwise ([E29](#e29-testing-llm-systems-beyond-the-golden-set)).
+- **Trajectory quality:** right tools with right arguments, no unnecessary or repeated steps, no loops,
+  correct handling of tool errors.
+- **Safety:** no forbidden actions, correct escalation, resistance to adversarial inputs.
+- **Efficiency:** steps, tokens, cost and latency per successful task.
+- For multi-agent systems, also **routing accuracy** and **handoff fidelity** ([E21](#e21-evaluating-a-multi-agent-system)).
 
-**What to monitor:**
+In production, add sampled human review, user feedback, escalation rates and full traces of every run
+([E19](#e19-validating-answers-in-production-when-theres-no-ground-truth), [E17](#e17-debugging-a-wrong-answer-in-production)).
 
-- **Job health** — success or failure, duration compared with normal (a job taking 3× longer is an early
-  warning), retries.
-- **Data freshness** — when the target table was last updated, against its SLA ("the dashboard must
-  have data by 7 a.m.").
-- **Volume** — row counts compared with expected ranges. A sudden drop to zero or a doubling usually
-  means something broke upstream.
-- **Data quality** — null rates, duplicates, invalid values, referential integrity, schema changes ([D7](INTERVIEW-GUIDE-2-INTERMEDIATE.md#d7-schema-evolution)).
-  Tools include Great Expectations, dbt tests and Databricks expectations (Lakeflow Declarative
-  Pipelines).
-- **Cost and resource use** — cluster time, spill, cost per run.
+### How would you debug an LLM that suddenly starts producing poor responses?
 
-Alerts should go to the right people with enough context to act, and avoid alert fatigue: alert on what
-someone must act on, and dashboard the rest.
+"Suddenly" means **something changed**, so start with the change log:
 
-**Troubleshooting a failure, step by step:**
+- a deployment (prompt, code, config);
+- a **provider model update** behind an unpinned alias;
+- new or re-ingested documents;
+- an embedding model or index change;
+- a shift in user traffic.
 
-1. **Scope the impact** — which tables and dashboards are stale or wrong, and who needs to know. Tell
-   them early.
-2. **Read the error and logs** — which task or activity failed, and with what error message.
-3. **Classify the cause:**
-   - **Source issue** — the source system was down, credentials expired, or the source schema changed.
-   - **Data issue** — unexpected nulls, a bad file, duplicates, a skewed new key.
-   - **Code or config issue** — a recent deployment, a changed dependency.
-   - **Infrastructure issue** — out of memory, cluster limits, timeouts, network.
-4. **Check "what changed"** — deployments, data volume, source schema, configuration. Most failures
-   follow a change.
-5. **Fix and rerun safely** — idempotent, re-runnable jobs (MERGE, partition overwrite) mean re-running
-   doesn't create duplicates ([D5](INTERVIEW-GUIDE-2-INTERMEDIATE.md#d5-incremental-data-loading)). Backfill the missed window.
-6. **Prevent recurrence** — add the missing quality check or alert, write a short post-mortem, and add a
-   test.
+Then:
 
-This mirrors the AI debugging approach in [E17](#e17-debugging-a-wrong-answer-in-production): good logging beforehand, find the first broken step,
-fix, then add a check so it can't silently happen again.
+1. **Confirm and scope it** with metrics: groundedness scores, validation and repair rates, escalations,
+   feedback. Which features or query types are affected?
+2. **Pull traces** of bad examples and find the first broken step: wrong facts or tools, retrieval miss,
+   model misreading good context, or bad routing ([E17](#e17-debugging-a-wrong-answer-in-production)).
+3. **Reproduce** against the golden set with the previous and current versions of each component, to
+   bisect the cause ([E10](#e10-proving-one-rag-pipeline-beats-another), [E20](#e20-rag-accuracy-fell-from-85-to-60-after-adding-documents)).
+4. **Roll back** the faulty piece (prompt, model version, index alias), fix it, and add the failing
+   cases to the golden set.
+
+Prevention: pinned model versions, eval gates on every change, and drift monitoring ([E23](#e23-llmops-from-raw-data-to-serving-to-feedback)).
+
+### How would you build a GenAI application that scales to millions of users?
+
+The guiding principle: **most requests should never reach a large model.**
+
+- **Stateless services** behind load balancers with autoscaling; sessions in a distributed cache.
+- **Tiered caching:** an in-process cache for the hottest queries, Redis, then a **semantic cache**,
+  with request coalescing during spikes ([I24](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i24-the-four-caches-in-llm-serving), [E34](#e34-case-study-ai-powered-search-for-e-commerce)).
+- **Pre-compute offline** whatever you can: enrichment, personalised content, embeddings ([E33](#e33-case-study-an-adaptive-learning-platform-duolingo-style), [E34](#e34-case-study-ai-powered-search-for-e-commerce)).
+- **Route by difficulty:** small or self-hosted models for the bulk, frontier models for the few hard
+  cases ([E3](#e3-choosing-a-model-under-real-constraints), [E18](#e18-cutting-llm-costs-without-killing-quality)).
+- **Async queues** for long tasks, so the interactive path stays fast ([I41](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i41-designing-for-low-latency)).
+- **Multi-provider redundancy** with circuit breakers and fallbacks, plus rate limits and per-user
+  budgets ([I10](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i10-retries-backoff-and-circuit-breakers), [I29](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i29-ai-gateway)).
+- **Scalable data tier:** read replicas, horizontally scaling stores for writes, a serverless or sharded
+  vector DB, multi-AZ deployment.
+- Do the **scale estimate** up front (requests per second, tokens per day, cost per day), since it drives
+  every one of these choices ([E16](#e16-system-design-the-interview-playbook-applied-to-an-agentic-copilot)).
+
+### How do you see agentic AI changing software development in the next 3–5 years?
+
+There's no single right answer. Interviewers want a grounded, balanced view. A reasonable one:
+
+- **From writing code to specifying and reviewing it.** Coding agents increasingly write, refactor and
+  test code. The engineer's value shifts toward clear specifications, architecture, reviewing diffs, and
+  owning correctness. The skill moves from typing code to directing and verifying work.
+- **Tests and evals become the steering wheel.** Agents iterate fastest against objective checks, so
+  good test suites, type systems and evaluation sets become even more valuable. They're what make
+  autonomous loops safe ([E11](#e11-loops-that-survive-crashes-durable-execution), [E29](#e29-testing-llm-systems-beyond-the-golden-set)).
+- **The SDLC absorbs AI-specific stages.** Prompts, retrieval policies, model configs and eval baselines
+  get versioned, reviewed and released like code (the AI-SDLC in [E23](#e23-llmops-from-raw-data-to-serving-to-feedback)).
+- **Standard protocols make tools and agents composable** (MCP, A2A), so integration work shrinks and
+  governance work grows ([E15](#e15-protocol-strategy-and-mcp-security)).
+- **Governance and security grow in importance:** agent permissions, audit trails, supply-chain risk
+  from AI-generated code, and accountability for automated decisions ([E28](#e28-llm-security-beyond-prompt-injection--and-privacy-patterns)).
+- **Humans stay in the loop where it matters**: product judgement, trade-offs, safety-critical
+  decisions.
+
+A good closing line: *the bottleneck moves from writing code to deciding what should be built and proving
+it works.*
+
+### How would you design a self-correcting RAG system that detects insufficient context and searches again?
+
+This is **Corrective RAG** with an agentic loop ([E27](#e27-graph-rag-corrective-rag-agentic-rag--and-choosing-an-architecture)):
+
+1. **Retrieve** with hybrid search and reranking.
+2. **Grade the context** before generating. A small model or a reranker score judges whether the chunks
+   actually contain what the question needs. You can also check coverage: does every part of the
+   question have supporting evidence?
+3. **If sufficient:** generate with citations.
+4. **If insufficient:** **reformulate** the query, try a **different strategy or source**, and retrieve
+   again:
+   - rewrite with synonyms, use HyDE, or split into sub-questions;
+   - widen k or relax filters;
+   - search another index, call a live tool, or (if allowed) search the web.
+5. **After generating**, check groundedness. If claims aren't supported, loop once more or drop the
+   unsupported claims.
+6. **Stop conditions:** cap the attempts (say 2–3 rounds) and a latency budget. If it's still
+   insufficient, answer honestly ("I couldn't find this") or escalate.
+
+Make it observable: log each grade and retry. Evaluate it on questions with **and without** answers in
+the corpus, so it's rewarded both for finding answers and for correctly admitting it can't ([E19](#e19-validating-answers-in-production-when-theres-no-ground-truth)).
+
+### Your AI application has excellent offline evaluation scores but poor production performance. What could explain the gap?
+
+The usual causes, roughly from most to least common:
+
+1. **The eval set doesn't represent real traffic.** Golden sets are often clean, well-phrased and
+   built by the team. Real users write vague, misspelt, multi-part, multilingual or out-of-scope
+   questions, in multi-turn context. Fix: sample and label real production queries into the eval set
+   ([E19](#e19-validating-answers-in-production-when-theres-no-ground-truth)).
+2. **Overfitting to the eval.** Prompts and retrieval were tuned until the golden set passed, so the
+   score measures memorisation of those cases. Fix: keep a held-out set, and refresh it ([E10](#e10-proving-one-rag-pipeline-beats-another)).
+3. **Different conditions in production:**
+   - fresher, larger or messier document corpus;
+   - permission filters removing context that offline tests could see;
+   - different model version or provider;
+   - timeouts and fallbacks to weaker models under load;
+   - caching serving stale answers.
+4. **Pipeline differences (training–serving skew):** offline evals called components directly,
+   while production goes through extra steps (query rewriting, history handling, truncation, a different
+   chunking or embedding version). Fix: evaluate the **real deployed pipeline** end to end.
+5. **Metric mismatch.** Offline metrics such as judge scores and exact match don't capture what users
+   value (completeness, tone, speed, actionability). Fix: tie evals to business outcomes, and validate
+   the judge against human ratings ([E9](#e9-checking-groundedness-at-scale-llm-as-judge)).
+6. **Drift over time:** new products, new question types, updated documents ([E23](#e23-llmops-from-raw-data-to-serving-to-feedback)).
+
+How to investigate: compare the distribution of production queries against the eval set, pull traces of
+failing production cases, and replay them through the offline harness. If they fail offline too, it's
+coverage; if they pass offline, it's a pipeline or environment difference.
 
 ---
 
@@ -1604,8 +1678,6 @@ If you only remember a handful of ideas, make it these:
   humans, and turn real traffic into new golden cases.
 - **Different caches live at different layers**: KV (one request), prefix/prompt (shared prefixes),
   semantic (skip the LLM, but watch staleness).
-- **Data pipelines need the same discipline**: incremental, idempotent loads, schema checks, and
-  monitoring of freshness, volume and quality.
 - **Separate the slow AI work from the fast path**: generate, enrich and pre-compute offline (with human
   review where quality matters), and keep the online path to caches, selection and small models.
 - **Every LLM output is untrusted input** to the next component: validate it, sanitise it, scope its
