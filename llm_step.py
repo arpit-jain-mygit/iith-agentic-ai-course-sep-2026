@@ -139,29 +139,38 @@ def build_user_prompt(prompt_facts: dict, chunks: list[dict]) -> str:
 #   - MAX_ATTEMPTS: the answer arrived but is not valid JSON; we send the
 #                   errors back so the model can correct its answer
 # ---------------------------------------------------------------------------
-def call_llm(user_prompt: str) -> LLMDecision:
-    """One validated decision from the model."""
+def call_structured(system_prompt: str, user_prompt: str, schema: type[BaseModel]) -> BaseModel:
+    """Shared: one validated instance of `schema` from the LLM.
+
+    Used by the triage call below (L4) AND the M1 parser (intake.py), so the
+    validation, repair retry and API retries are written once.
+    """
     import litellm
     os.environ.setdefault("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
 
     model = llm_model()
-    logger.info("L4: calling %s", model)
-    messages = [{"role": "system", "content": SYSTEM_PROMPT},
+    logger.info("LLM: calling %s for %s", model, schema.__name__)
+    messages = [{"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}]
     for attempt in range(1, MAX_ATTEMPTS + 1):
         resp = litellm.completion(model=model, messages=messages,
-                                  response_format=LLMDecision, temperature=0,
+                                  response_format=schema, temperature=0,
                                   num_retries=API_RETRIES)
         text = resp.choices[0].message.content
         try:
-            decision = LLMDecision.model_validate_json(text)
-            logger.info("L4: valid decision on attempt %d", attempt)
-            return decision
+            result = schema.model_validate_json(text)
+            logger.info("LLM: valid %s on attempt %d", schema.__name__, attempt)
+            return result
         except ValidationError as e:
-            logger.warning("L4: attempt %d returned invalid JSON: %s", attempt, e)
+            logger.warning("LLM: attempt %d returned invalid JSON: %s", attempt, e)
             messages += [{"role": "assistant", "content": text},
                          {"role": "user", "content": f"Fix these errors, return JSON only:\n{e}"}]
     raise RuntimeError(f"no valid JSON after {MAX_ATTEMPTS} attempts")
+
+
+def call_llm(user_prompt: str) -> LLMDecision:
+    """L4 triage call: the shared helper with the triage prompt and schema."""
+    return call_structured(SYSTEM_PROMPT, user_prompt, LLMDecision)
 
 
 # ---------------------------------------------------------------------------
