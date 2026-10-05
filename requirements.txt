@@ -1,0 +1,7 @@
+# PlantGuard project dependencies
+# Install into the project venv:  .venv/bin/python -m pip install -r requirements.txt
+
+pydantic          # models.py: validates intake events (used by facts.py)
+python-dotenv     # rag_common.py: loads secrets from .env
+litellm           # rag_common.py / llm_step.py: Gemini embeddings and LLM calls
+qdrant-client     # rag_common.py: vector database

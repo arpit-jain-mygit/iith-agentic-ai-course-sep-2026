@@ -1,0 +1,13 @@
+# Secrets and machine-specific settings
+.env
+
+# Local environment and caches
+.venv/
+__pycache__/
+.embcache/
+
+# Saved llm_step runs (regenerate with decide.py --save)
+runs/
+
+# Old text dumps
+*_text.txt
