@@ -137,6 +137,29 @@ problem is solved. It isn't. Long prompts are slower, cost more, and the model g
 information as the window fills. That's the 🟡 topic [I2](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i2-context-rot--why-a-bigger-window-isnt-the-fix). For a beginner answer it's enough to say the
 window is a hard limit on what the model can see per call, and that filling it isn't free.
 
+**Context window vs session vs context.** These three get mixed up a lot, and interviewers like to
+check them:
+
+- The **context window** is **per API call**: the most tokens a single request can hold. Each call is
+  independent.
+- A **session** is an **application** concept: one user's ongoing chat or one agent run, spanning
+  **many** calls, usually tracked by a `session_id`. The app stores its state (history, tool results,
+  user info) in memory, Redis or a database. A session can grow far larger than any window.
+- The **context** is what the app **actually sends in one call**: the system prompt plus a *selection*
+  built from the session state and retrieval. Once the session outgrows the window, the app chooses
+  what to keep: recent turns, a summary, or the relevant pieces ([I13](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i13-long-conversations-truncation-summaries-long-term-memory)).
+
+Analogy: the session is the **case file** in the cabinet, the context is the **pages you put on the
+desk** for this meeting, and the window is the **size of the desk**. Every meeting starts with an empty
+desk.
+
+In PlantGuard's M2 agent, one triage run is a session. Each loop step is a separate call with its own
+window, and the growing `messages` list is resent every time.
+
+Some APIs can also store conversation state on the provider side. That changes *who stores* the
+history, not how the model works: it still re-reads everything each call, and it still counts toward
+the window and the bill (prompt caching can make repeated prefixes cheaper, [I24](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i24-the-four-caches-in-llm-serving)). More detail: [provider-side conversation state](#provider-side-conversation-state).
+
 ## B4. What goes into a prompt
 
 A useful way to think about a prompt is in four parts:
@@ -833,6 +856,82 @@ It matters because it turns the N agents × M tools integration problem into N +
 rewriting the same connectors, tools become reusable across apps and vendors, and capabilities are
 discovered at runtime rather than hard-coded ([I22](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i22-how-mcp-works-when-to-use-a2a), [I44](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i44-mcp-in-depth-primitives-discovery-and-tool-overload)). The flip side is that every server is part of
 your attack surface, so MCP needs governance and security controls ([E15](INTERVIEW-GUIDE-3-EXPERT.md#e15-protocol-strategy-and-mcp-security)).
+
+---
+
+## Additional details
+
+### Provider-side conversation state
+
+*Linked from [B3](#b3-the-context-window).* This is about **who keeps the conversation history**: your
+app, or the AI provider.
+
+**1. The default: stateless (your app keeps the history).** With most APIs (OpenAI Chat Completions,
+Anthropic Messages, Gemini `generateContent`, and LiteLLM, which PlantGuard uses), you send the **whole
+conversation every time**:
+
+```python
+# Turn 1
+messages = [{"role": "user", "content": "Chiller tripped. Why?"}]
+reply1 = call(messages)
+
+# Turn 2: you resend turn 1 + reply 1 + the new question
+messages += [{"role": "assistant", "content": reply1},
+             {"role": "user", "content": "What part should I order?"}]
+reply2 = call(messages)
+```
+
+The provider forgets everything after each call. Your code owns the `messages` list.
+
+**2. The alternative: provider-side state (the provider keeps the history).** Some APIs let the
+provider store the conversation for you. You send **only the new message** plus a reference to the
+earlier one. The clearest example is OpenAI's **Responses API**:
+
+```python
+r1 = client.responses.create(model="...", input="Chiller tripped. Why?")
+
+# Turn 2: no history sent, just "continue from r1"
+r2 = client.responses.create(model="...", input="What part should I order?",
+                             previous_response_id=r1.id)
+```
+
+`previous_response_id` tells the provider: "fetch the conversation you stored for that response and
+continue it." OpenAI also offers a "conversation" object for the same purpose.
+
+**3. The nuance: the model is still stateless.** Provider-side state only moves the storage. Behind
+the scenes, the provider looks up the stored history and **feeds it all back into the model** on every
+call. So:
+
+- the model still re-reads the full history each turn;
+- it still counts against the **context window**;
+- you are still **billed** for those earlier tokens as input, though prompt caching may make the
+  repeated part cheaper ([I24](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i24-the-four-caches-in-llm-serving)).
+
+It's like a hotel concierge holding your file. You no longer carry it to every meeting, but someone
+still reads the whole file before each meeting.
+
+**4. Don't confuse it with SDK "chat" helpers.** Some SDKs offer a `chat` object, for example
+`client.chats.create()` in Google's SDK, that *feels* stateful. Often it just keeps the history **in
+your process** and resends it for you. That's still the stateless pattern, wrapped for convenience.
+
+**5. Trade-offs: why you'd choose one or the other**
+
+| | App keeps history (stateless) | Provider keeps history |
+|---|---|---|
+| Request size | grows each turn | small (new message + ID) |
+| Control | full: you can trim, summarise, redact, reorder | less: you depend on the provider's handling |
+| Switching models or providers | easy (same `messages` list works anywhere) | locked to that provider's stored conversation |
+| Privacy | data stays in your systems | conversation stored by the provider (check retention terms) |
+| Debugging and audit | everything is in your logs | part of the state lives outside your system |
+| Effort | you build session storage | less code for simple chat apps |
+
+PlantGuard deliberately uses the stateless pattern. It goes through LiteLLM so it can switch
+providers. It also needs full control over what goes into the context (the field allow-list, the time
+cut-off, trimming), and complete local logs to replay a decision.
+
+**One line for interviews:** *"Provider-side state saves you from resending history, but it doesn't
+make the model remember. The provider still replays the history into the context on every call, so
+window limits and token costs still apply, and you trade control and portability for convenience."*
 
 ---
 

@@ -497,6 +497,26 @@ dominates.
 question, you retrieve for each, and you fuse all the lists with RRF. It helps when users phrase things
 vaguely or differently from the documents, at the cost of extra retrieval calls.
 
+**Cross-encoder vs LLM as the reranker.** The reranker doesn't have to be a dedicated cross-encoder
+model. You can also ask an LLM to score the candidates. Each option has a trade-off:
+
+- **Cross-encoder** (e.g. `ms-marco-MiniLM`): small, runs locally, ~10–50 ms, no API cost. But it adds
+  a model dependency, and it was trained on general web search, so it may misjudge domain jargon.
+- **LLM reranker**: one call scores all candidates together ("rate each excerpt 0–10 for how directly
+  it answers the query"). It understands domain language and nuance with no extra model to host. The
+  costs are latency (a second or two), money and rate limits, and scores vary slightly between runs.
+
+Two habits make an LLM reranker production-safe:
+
+- **Cache** scores by (model + query + candidate IDs).
+- **Fall back** to the hybrid order if the call fails, so retrieval never breaks because of the
+  reranker.
+
+PlantGuard uses an LLM reranker over 10 hybrid candidates per source. For "lead time of part
+VPW-P-00035", dense search returned generic preamble sections. The reranker promoted the *Approved
+Supplier Tiers and Lead Times* section, the one that actually answers the question.
+
+
 ## I19. Measuring retrieval and RAG quality
 
 You want to measure two things separately: **did retrieval find the right material?** and **did the
