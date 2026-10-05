@@ -285,7 +285,7 @@ If you build a ReAct loop by hand (a good exercise), the classic first version a
 lines like `Action: lookup_population: India` and parses them with a regex. It works in a demo but is
 brittle: an extra space or a slightly different label breaks the parser, and the model may invent a tool
 that doesn't exist. Production versions use the provider's native **function calling** (structured tool
-requests) instead of parsing free text, and validate every requested tool name and argument.
+requests) instead of parsing free text, and validate every requested tool name and argument. Worked example: [text parsing vs native function calling in PlantGuard](#react-text-parsing-vs-native-function-calling).
 
 ## B10. The four kinds of agent memory
 
@@ -1008,6 +1008,114 @@ USER MESSAGE
   rule, what is evidence, and what is untrusted input.
 - **Context does the heavy lifting.** The instruction is a few lines; the facts and documents decide
   whether the answer is right. That's why building the context is an engineering job ([I3](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i3-prompt-engineering-vs-context-engineering)).
+
+### ReAct: text parsing vs native function calling
+
+*Linked from [B9](#b9-the-react-loop).* Both ways run the same loop (think → act → observe). They differ
+in **how the model asks for a tool**, and that decides how often the loop breaks.
+
+**1. The classic way: the model writes text, your code parses it**
+
+The prompt tells the model to write lines in a fixed pattern, and a regex picks them apart:
+
+```text
+Thought: I need the sensor history first.
+Action: get_sensor_history: VPW-CHILLER-01
+```
+
+```python
+match = re.match(r"Action: (\w+): (.*)", line)
+tool, arg = match.group(1), match.group(2)
+```
+
+It works in a demo and breaks in many small ways:
+
+- `Action : get_sensor_history` (extra space) → the regex doesn't match;
+- `Action: Get_Sensor_History` (different casing) → unknown tool;
+- `Action: check_spare_parts: VPW-CHILLER-01, VPW-P-00043` → is that one argument or two?
+- `Action: check_inventory: ...` → a tool that doesn't exist (hallucinated);
+- the model writes the Observation itself, inventing a tool result.
+
+**2. The production way: native function calling**
+
+You send the tool definitions as **structured schemas** alongside the messages. The model replies with a
+**structured tool request**, not prose, so there's nothing to parse. PlantGuard's M2 agent
+(`llm_step.py`) defines its six tools like this:
+
+```python
+_tool("check_spare_parts",
+      "Spare-part stock for this machine's class: on hand, reorder point, lead time, "
+      "open purchase orders. Give part_numbers to check specific parts; ...",
+      {"asset_tag": {"type": "string", "description": "machine tag, e.g. VPW-CHILLER-01"},
+       "part_numbers": {"type": "array", "items": {"type": "string"}}},
+      required=["asset_tag"])
+```
+
+and calls the model with them:
+
+```python
+resp = litellm.completion(model=llm_model(), messages=messages,
+                          tools=TOOLS, tool_choice="auto")
+```
+
+When the model wants a tool, the response contains a typed request like this:
+
+```json
+{"tool_calls": [{
+  "id": "call_7",
+  "function": {
+    "name": "check_spare_parts",
+    "arguments": "{\"asset_tag\": \"VPW-CHILLER-01\", \"part_numbers\": [\"VPW-P-00043\"]}"
+  }
+}]}
+```
+
+The tool name is a separate field, and the arguments are JSON shaped by your schema. The provider has
+trained the model to produce exactly this format, which makes it far more reliable than a regex over
+prose. When the model stops requesting tools, the loop ends.
+
+**3. "The model requests, your code decides": validating every call**
+
+A structured request is still **only a request**. It can name a tool that doesn't exist, or pass a wrong
+or invented argument. PlantGuard's `run_tool()` checks each one before anything runs, and turns every
+problem into an **error message sent back to the model** instead of a crash:
+
+| Check | What happens in PlantGuard |
+|---|---|
+| Tool name exists? | name not in `TOOL_FUNCTIONS` → `{"error": "unknown tool 'check_inventory'"}` |
+| Arguments are valid JSON? | `json.loads` fails → `{"error": "arguments are not valid JSON"}` |
+| Right argument names? | a missing or unexpected argument raises `TypeError` → `{"error": "bad arguments: ..."}` |
+| Argument values real? | `_asset_or_error()` looks the tag up in the asset registry → `{"error": "unknown asset_tag 'VPW-CHILER-01'"}` |
+| Tool itself fails? | any exception → `{"error": "KeyError: ..."}`; the loop continues |
+
+Because the error goes back as the tool result, the model can **correct itself** on the next step,
+for example by retrying with the right tag. The run doesn't crash.
+
+**Limits around the loop:**
+
+- `AGENT_MAX_STEPS = 8` caps the rounds of tool calls.
+- `TOOL_RESULT_MAX_CHARS = 6000` cuts long tool results to keep the context small.
+- After the loop, the final answer is a separate **validated** structured call (`LLMDecision`), and its
+  citations are checked against the chunks the tools actually returned.
+
+**4. What a stricter production version would add**
+
+PlantGuard's checks cover names, argument names and real asset tags. A hardened version would go
+further:
+
+- **Validate argument types and allowed values against the schema** (for example with Pydantic or
+  JSON Schema). Today, `certification="welding"` or `hours="eight"` would reach the function; a schema
+  check would reject them with a clear message.
+- **Per-agent tool allow-lists:** only the procurement agent gets ordering tools.
+- **Human approval for writes:** any action with side effects, such as ordering parts or creating work
+  orders, pauses for sign-off ([E4](INTERVIEW-GUIDE-3-EXPERT.md#e4-where-safety-controls-belong)).
+- **Idempotency keys** on write tools, so a retried call doesn't act twice ([I9](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i9-idempotency-and-parallel-tool-calls)).
+
+Tool design itself (clear descriptions, few typed parameters, helpful errors) is covered in [I8](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i8-designing-a-good-tool).
+
+**One line for interviews:** *"Native function calling replaces fragile text parsing with structured,
+schema-shaped requests. But the request is still untrusted: the harness validates the tool name,
+arguments and values, returns errors the model can recover from, and caps the loop."*
 
 ---
 
