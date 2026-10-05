@@ -11,3 +11,6 @@ runs/
 
 # Old text dumps
 *_text.txt
+
+# macOS folder metadata
+.DS_Store
