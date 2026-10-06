@@ -383,6 +383,7 @@ There are two basic ways to search text:
 Neither is better overall; they fail in opposite places. That's why production systems often combine
 them (hybrid search, [I17](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i17-hybrid-search)). A nice interview example: *"if a technician searches a part number, I want
 keyword search; if they describe a symptom in their own words, I want semantic search."*
+How keyword scoring actually works: [BM25 explained simply](#bm25-explained-simply).
 
 ## B15. Hallucination and groundedness
 
@@ -1405,6 +1406,101 @@ See I45 for where each of these sits among all retrieval strategies.
 the representation (meaning spread over every position vs one slot per word), and semantic search is
 the goal. In text RAG, semantic search is usually done with vector search over dense embeddings, and
 combined with sparse keyword search for exact terms."*
+
+### BM25 explained simply
+
+*Linked from [B14](#b14-keyword-vs-semantic-search).* **BM25** ("Best Matching 25", the 25th version of
+a scoring formula from the 1990s) is the standard way keyword search ranks documents. Elasticsearch,
+OpenSearch, Solr and Lucene all use it by default. It answers one question: *for this query, which
+documents contain its words in the most telling way?*
+
+**The analogy: a librarian with an index**
+
+Imagine a librarian scoring every page for your request "bearing VPW-P-00043". They use three common-sense
+rules:
+
+1. **Rare words matter more.** "Bearing" appears on many pages, so finding it says little. The part
+   number "VPW-P-00043" appears on almost none, so a page that has it is very likely the one you want.
+   This is **IDF** (inverse document frequency): the rarer the word in the whole collection, the more
+   it's worth.
+2. **Repeating a word helps, but with diminishing returns.** A page mentioning "bearing" four times is
+   probably more about bearings than a page mentioning it once, but not four times more. After a few
+   mentions, extra ones add very little. This is **term-frequency saturation**, and it stops a page from
+   winning just by repeating a word.
+3. **Short pages get a fair chance.** One mention in a two-line note is more meaningful than one mention
+   buried in a 20-page chapter. This is **length normalisation**: scores are adjusted for page length
+   compared with the average.
+
+A page's score is the sum of these weighted word matches over the query's words. Highest score first.
+
+**A worked example** (eight short manual snippets; real scores from the same `rank_bm25` library
+PlantGuard uses):
+
+| Doc | Text (shortened) |
+|---|---|
+| A | "Replace bearing **VPW-P-00043** if vibration exceeds the trip limit." |
+| B | "Check the bearing temperature. A hot bearing… inspect the bearing housing and the bearing seal." |
+| C | "Spare parts list: fan motor bearing, belt, filter and coupling." |
+| D–H | five snippets about lockout, permits, shift readings, condenser cleaning and alarms (no "bearing") |
+
+Word weights (IDF): **"vpw-p-00043" = 1.61** (in 1 of 8 docs), **"bearing" = 0.45** (in 3 of 8).
+
+| Query | A | B | C | Winner and why |
+|---|---|---|---|---|
+| `bearing` | 0.48 | **0.72** | 0.46 | **B**: it says "bearing" 4 times, but scores only 1.5× A, not 4× (saturation) |
+| `bearing VPW-P-00043` | **2.20** | 0.72 | 0.46 | **A**: the rare part number is worth far more than the common word (IDF) |
+| `machine cut out` | 0 | 0 | 0 | nothing: none of these exact words appear |
+
+The last row shows the weakness: BM25 matches **words, not meaning**. A query "machine cut out" finds
+nothing, though "trip limit" in doc A means the same thing. That's exactly where semantic search helps,
+and why the two are combined in hybrid search ([I17](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i17-hybrid-search)).
+
+**The formula, if an interviewer asks**
+
+For each query word *q* in document *D*:
+
+```text
+score += IDF(q) × ( f · (k1 + 1) ) / ( f + k1 · (1 − b + b · |D| / avgdl) )
+```
+
+- `f` = how many times *q* appears in *D*;
+- `|D|` / `avgdl` = this document's length compared with the average;
+- `k1` (usually 1.2–2.0) controls saturation: higher means repeats keep counting longer;
+- `b` (usually 0.75) controls length normalisation: 0 = ignore length, 1 = full adjustment.
+
+You rarely need to tune them; the defaults work well.
+
+**Things that make or break BM25 in practice**
+
+- **Tokenization** decides what a "word" is. A naive split on punctuation turns `VPW-P-00043` into
+  `vpw`, `p`, `00043`: common fragments that match every part number. PlantGuard's tokenizer keeps codes
+  like `vpw-p-00043` and `vib_trip` whole, so they stay rare and powerful.
+- **Stemming and stop words** ("bearings" → "bearing"; dropping "the", "and") help in general text;
+  many engines do this by default.
+- **No synonyms, no meaning**: "cut out" ≠ "trip", "hot" ≠ "overheating", unless you add synonym lists.
+- **Scores aren't comparable to cosine similarity.** BM25 scores are unbounded and depend on the
+  collection, so you can't simply add them to vector scores. Hybrid search merges by rank instead (RRF,
+  [I18](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i18-reranking-rrf-and-rag-fusion)).
+- **Very small collections behave oddly:** with only a handful of documents, a word that appears in half
+  of them gets almost no weight. That's not a problem at real scale.
+
+**BM25 vs TF-IDF.** TF-IDF is its simpler ancestor: term frequency × rarity. BM25 adds the two fixes
+above (saturation and length normalisation), which is why it replaced TF-IDF as the default.
+
+**In PlantGuard (M4)**
+
+- `rag_common.py` builds a BM25 index (`rank_bm25.BM25Okapi`) in memory over all ~106 manual and SOP
+  chunks. It reads them back from Qdrant and indexes title + section + text.
+- The tokenizer keeps codes whole (`vpw-p-00043`, `vib_trip`).
+- Results are limited to the event's asset class or plant-wide documents, and zero-score chunks are
+  dropped.
+- BM25's list and the dense vector list are fused with RRF, then reranked by an LLM. On the golden set,
+  hybrid raised recall from 86% to 89%.
+
+**One line for interviews:** *"BM25 scores documents by matching query words, weighting rare words more,
+giving diminishing returns for repeats, and normalising for length. It's excellent for exact terms like
+part numbers and blind to synonyms, which is why it's paired with dense vector search in hybrid
+retrieval."*
 
 ---
 
