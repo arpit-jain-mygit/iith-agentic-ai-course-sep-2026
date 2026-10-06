@@ -790,6 +790,8 @@ fine-tuning fits in ([E30](INTERVIEW-GUIDE-3-EXPERT.md#e30-reinforcement-fine-tu
 
 ## Common interview questions at this level
 
+More questions, grouped by category (serving, RAG, agents, guardrails, evaluation, coding, system design): the [interview question bank](INTERVIEW-GUIDE-3-EXPERT.md#interview-question-bank-by-category) in the Expert guide.
+
 These are frequently asked "real-world" questions. Each answer is the short version you'd say out loud;
 the links go to the full explanation.
 

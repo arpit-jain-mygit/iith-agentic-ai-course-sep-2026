@@ -438,6 +438,8 @@ Whatever the strategy, **smart chunk metadata** helps a lot. Store the parent se
 title with each chunk, so a retrieved paragraph still carries its context ("Chiller manual → Fault
 codes → High-pressure trip").
 
+Worked examples, which strategy suits which documents, and the trade-offs: [chunking strategies in depth](#chunking-strategies-in-depth).
+
 ## I16. Ingesting messy real-world documents
 
 Demo RAG uses clean text. Real documents are messy, and **bad ingestion caps the quality of everything
@@ -762,6 +764,8 @@ one place.
 In PlantGuard, each manual section is stored in Qdrant with its vector and a payload (document title,
 section, asset type, plant-wide or asset-specific), which is what makes the split search (3 asset + 3
 plant) possible.
+
+How the index algorithms work, with analogies and when to use which: [ANN, HNSW and IVF-PQ explained](#ann-hnsw-and-ivf-pq-explained).
 
 ## I26. Choosing an embedding model
 
@@ -1582,6 +1586,8 @@ diversified. Then I pick by the failure I measure, not by what's fashionable."*
 
 ## Common interview questions at this level
 
+More questions, grouped by category (serving, RAG, agents, guardrails, evaluation, coding, system design): the [interview question bank](INTERVIEW-GUIDE-3-EXPERT.md#interview-question-bank-by-category) in the Expert guide.
+
 Short, interview-ready answers to frequently asked questions, with links to the full topics.
 
 ### How would you reduce hallucinations in an LLM application?
@@ -1715,6 +1721,372 @@ From the most common wins to the more advanced:
 - **GraphRAG** for multi-hop relationship questions ([E27](INTERVIEW-GUIDE-3-EXPERT.md#e27-graph-rag-corrective-rag-agentic-rag--and-choosing-an-architecture)).
 
 Above all, **measure** each change with recall@k on a golden set ([I19](#i19-measuring-retrieval-and-rag-quality), [E10](INTERVIEW-GUIDE-3-EXPERT.md#e10-proving-one-rag-pipeline-beats-another)).
+
+---
+
+## Additional details
+
+### Chunking strategies in depth
+
+*Linked from [I15](#i15-chunking-strategies-compared).* The same short document is chunked by each
+strategy, so you can see what each one produces, what it suits, and what it costs.
+
+**The sample document** (a shortened chiller manual):
+
+```text
+CHILLER-01 OPERATION AND MAINTENANCE MANUAL
+
+2. NORMAL OPERATING RANGES
+Condenser pressure: 9-15 bar. Warning above 16 bar; trip at 18 bar.
+Evaporator leaving water temperature: 6-8 °C.
+
+4. FAULT-CODE TABLE AND CORRECTIVE ACTIONS
+| Code    | Cause                    | Action                                            |
+| HP_TRIP | High condenser pressure  | Check condenser water flow; clean tubes if fouled |
+| LP_TRIP | Low suction pressure     | Check refrigerant charge; inspect for leaks       |
+
+7. SAFETY-CRITICAL ACTIONS
+Isolate the electrical supply and apply lockout before opening the compressor housing.
+A pressure-system permit is required for any work on the refrigerant circuit.
+```
+
+The test question for every strategy: ***"What should I do for an HP_TRIP?"*** A good chunk contains the
+HP_TRIP row **with its header** (so "Check condenser water flow" is clearly the *action*), ideally with
+the trip limit nearby.
+
+#### 1. Fixed-size (with overlap)
+
+Cut every N characters or tokens, e.g. 120 characters with 20 overlapping:
+
+```text
+chunk 3: "...| Code | Cause | Action | | HP_TRIP | High condenser pres"
+chunk 4: "ser pres sure | Check condenser water flow; clean tubes if fo"
+```
+
+- **Result for the question:** the HP_TRIP row is split across two chunks, and the action is separated
+  from its cause and the header. Retrieval may return half a row.
+- **Good for:** quick prototypes; uniform text with no structure (logs, transcripts) as a baseline.
+- **Trade-off:** simplest and predictable in size, but it **cuts sentences, rows and ideas** at random
+  points. Overlap (10–20%) softens the cut but duplicates text.
+
+#### 2. Recursive (split by separators, largest first)
+
+Try to split on blank lines (paragraphs); if a piece is still too big, split on line breaks, then
+sentences, then words. This is LangChain's `RecursiveCharacterTextSplitter`.
+
+```text
+chunk 2: "4. FAULT-CODE TABLE AND CORRECTIVE ACTIONS
+          | Code | Cause | Action |
+          | HP_TRIP | High condenser pressure | Check condenser water flow; clean tubes if fouled |"
+chunk 3: "| LP_TRIP | Low suction pressure | Check refrigerant charge; inspect for leaks |"
+```
+
+- **Result:** rows stay whole, but a big table may still be split, and a later chunk (LP_TRIP) loses
+  the header.
+- **Good for:** **the general default** for prose: articles, emails, reports, wiki pages.
+- **Trade-off:** respects natural boundaries cheaply, but **doesn't understand the document's
+  structure**: sections and tables can still be split.
+
+#### 3. Structure-based (by headings, sections, pages)
+
+Use the document's own structure: one chunk per section (Markdown or HTML headers, numbered headings,
+PDF sections).
+
+```text
+chunk "2. NORMAL OPERATING RANGES"         → ranges + warning + trip limits
+chunk "4. FAULT-CODE TABLE ..."            → the whole table, header included
+chunk "7. SAFETY-CRITICAL ACTIONS"         → lockout + permit rules
+```
+
+- **Result:** the fault-table chunk contains HP_TRIP with its header and action. Each chunk is one
+  complete topic, easy to cite as "file + section".
+- **Good for:** **manuals, SOPs, policies, contracts, standards, documentation**: anything with
+  reliable headings.
+- **Trade-off:** chunk sizes vary a lot. A huge section needs a **fallback split**; a tiny one may lack
+  context. It depends on headings being detected correctly, so messy PDFs need careful parsing ([I16](#i16-ingesting-messy-real-world-documents)).
+
+#### 4. Semantic (split where the topic changes)
+
+Embed each sentence; start a new chunk when the similarity between neighbouring sentences drops below a
+threshold.
+
+```text
+chunk A: "Condenser pressure 9-15 bar... trip at 18 bar."  + "HP_TRIP | High condenser pressure | ..."
+         (both about condenser pressure, so grouped together across sections)
+chunk B: "Evaporator leaving water temperature..." + "LP_TRIP | Low suction pressure..."
+chunk C: "Isolate the electrical supply... permit is required..."
+```
+
+- **Result:** can group related content well (here the limit and the HP_TRIP action end up together),
+  but it can also **merge across sections or break a table** where sentences look dissimilar.
+- **Good for:** long, flowing text **without** reliable headings: transcripts, essays, research
+  narrative, meeting notes.
+- **Trade-off:** coherent chunks, but **an embedding call per sentence at ingestion**, a **threshold
+  that needs tuning per corpus**, and less predictable output.
+
+#### 5. LLM-based (propositions, "agentic chunking")
+
+An LLM rewrites or splits the text into small, **self-contained statements** (propositions):
+
+```text
+"Fault code HP_TRIP on CHILLER-01 is caused by high condenser pressure."
+"For HP_TRIP, check condenser water flow and clean the tubes if they are fouled."
+"The condenser pressure trip limit is 18 bar."
+```
+
+- **Result:** each chunk answers a question precisely, and pronouns and context are resolved.
+- **Good for:** high-value, relatively small corpora where precision matters (FAQ bases, key policies),
+  and knowledge-graph or memory extraction.
+- **Trade-off:** the **most expensive** and slowest option (an LLM call per section), **non-deterministic**,
+  may **paraphrase or drop details**, and re-running ingestion can change the chunks. Keep the original
+  text alongside for citations.
+
+#### 6. Parent–child (small-to-big)
+
+Index **small** pieces for precise matching; return their **larger parent** to the LLM.
+
+```text
+children (searched):  row "HP_TRIP | High condenser pressure | Check condenser water flow..."
+parent  (returned):   the whole section 4 (header + all rows)
+```
+
+- **Result:** the precise row is matched, and the model reads the complete table.
+- **Good for:** documents where **precise matching and full context are both needed**: manuals,
+  legal clauses, specifications.
+- **Trade-off:** more complex indexing (two levels, parent lookups), and returning parents uses more
+  prompt tokens.
+
+#### 7. Sentence-window
+
+Embed single sentences; return each match with N sentences on either side ([I45](#i45-retrieval-strategies-the-full-map)).
+
+```text
+match:   "Warning above 16 bar; trip at 18 bar."
+returned: "Condenser pressure: 9-15 bar. Warning above 16 bar; trip at 18 bar.
+           Evaporator leaving water temperature: 6-8 °C."
+```
+
+- **Good for:** long prose without structure, where a single sentence holds the key fact.
+- **Trade-off:** many vectors (one per sentence), and the window doesn't respect section boundaries.
+  Here it pulls in an unrelated evaporator line.
+
+#### 8. Table-aware
+
+Detect tables and keep them whole, or split them into **row groups that repeat the header** ([bank Q7](INTERVIEW-GUIDE-3-EXPERT.md#q7-ingest-large-tables-without-losing-structure)):
+
+```text
+"Fault-code table (CHILLER-01) | Code | Cause | Action |
+ | HP_TRIP | High condenser pressure | Check condenser water flow; clean tubes if fouled |"
+```
+
+- **Good for:** spec sheets, fault tables, price lists, schedules.
+- **Trade-off:** needs a table-aware parser. Very large numeric tables are better in a database queried
+  by SQL than chunked at all.
+
+#### 9. Code-aware (AST)
+
+Split source code along its syntax tree: one function or class per chunk ([I15](#i15-chunking-strategies-compared)).
+
+- **Good for:** codebases, notebooks, configuration.
+- **Trade-off:** needs a parser per language; very long functions still need splitting.
+
+*A newer idea worth knowing by name:* **late chunking** embeds the **whole document first** with a
+long-context embedding model, then pools the token vectors per chunk, so each chunk's vector "knows" the
+rest of the document. It's an alternative to contextual retrieval ([I45](#i45-retrieval-strategies-the-full-map)).
+
+#### Which strategy for which documents
+
+| Document type | Best starting strategy | Why |
+|---|---|---|
+| Equipment manuals, SOPs, policies, standards | **structure-based** + paragraph fallback (+ parent–child) | clear sections; each answer lives in one section; citations by section |
+| Contracts, legal and regulatory text | structure-based (clauses) + parent–child | clauses must stay intact; cross-references need the parent |
+| Product docs, wikis (Markdown/HTML) | structure-based on headers | the headers already mark topics |
+| Articles, reports, emails | **recursive** | prose with paragraphs, inconsistent headings |
+| Meeting or call transcripts, interviews | **semantic** or sentence-window | no headings; topics drift |
+| FAQs | one Q&A pair per chunk (structure) | each pair is a complete answer |
+| Tables, spec sheets | **table-aware** (or SQL for big numeric tables) | structure is the meaning |
+| Source code | **AST / code-aware** | functions and classes are natural units |
+| Small, high-value knowledge (key rules) | LLM / propositions | precision worth the cost |
+| Mixed messy PDFs | structure-based where headings exist, recursive elsewhere, tables separately | real corpora usually need a mix |
+
+#### Trade-offs at a glance
+
+| Strategy | Ingestion cost | Keeps meaning together | Predictable size | Needs structure | Deterministic |
+|---|---|---|---|---|---|
+| Fixed-size | very low | ✗ poor | ✓ | no | ✓ |
+| Recursive | low | ◐ fair | ◐ | no | ✓ |
+| Structure-based | low | ✓ good | ✗ varies | **yes** | ✓ |
+| Semantic | medium (embed every sentence) | ✓ good | ✗ | no | ◐ (threshold) |
+| LLM / propositions | **high** (LLM per section) | ✓ very good | ◐ | no | ✗ |
+| Parent–child | low–medium | ✓ (via parent) | ◐ | helps | ✓ |
+| Sentence-window | medium (many vectors) | ◐ | ✓ | no | ✓ |
+| Table-aware / AST | low–medium (parsers) | ✓ for tables/code | ◐ | yes (tables/code) | ✓ |
+
+#### Chunk size: the other half of the decision
+
+- **Too small** (a sentence): precise matches, but the chunk lacks the context to answer (*"trip at 18
+  bar"*, of what?).
+- **Too large** (a whole chapter): has the context, but the embedding becomes a blurry average, the
+  match gets weaker, and the prompt fills with irrelevant text (context dilution, [E8](INTERVIEW-GUIDE-3-EXPERT.md#e8-how-much-to-retrieve-and-when)).
+- **Practical starting points:** about **300–800 tokens** for prose, with **10–20% overlap** for
+  fixed or recursive splitting; whole sections for structured documents, with a size cap. Stay well
+  under the embedding model's maximum input.
+- **Then measure.** Run the golden set with two or three sizes or strategies and compare recall@k and
+  MRR ([I19](#i19-measuring-retrieval-and-rag-quality)), one change at a time.
+
+#### What PlantGuard does
+
+- **Structure-based** chunking on the manuals' numbered top-level headings ("2. NORMAL OPERATING
+  RANGES", "SECTION 2: …"). Sub-clauses and numbered list items are deliberately *not* treated as
+  headings, and a heading's number must follow the previous one, so stray numbers don't start false
+  chunks.
+- A **recursive fallback**: a section longer than 4,000 characters is split on paragraph boundaries,
+  repeating one paragraph between parts. A single paragraph is never cut.
+- Text before the first heading becomes a "Preamble" chunk.
+- Each chunk is embedded with a short **header** (document title + section): a cheap form of contextual
+  retrieval ([I45](#i45-retrieval-strategies-the-full-map)).
+- Result: about 106 chunks, each one complete topic (a limits table, a fault table, a safety list) that
+  the LLM can read whole and cite by file and section. On the golden set this gives about 86–89% recall
+  of the documents that must be cited (H4).
+
+**One line for interviews:** *"I pick chunking by document type: structure-based for manuals and
+policies, recursive for general prose, semantic for transcripts, AST for code, table-aware for tables,
+and parent–child when I need both precise matching and full context. Then I tune chunk size on a
+golden set rather than guessing."*
+
+### ANN, HNSW and IVF-PQ explained
+
+*Linked from [I25](#i25-inside-a-vector-database).* These are ways for a vector database to find the
+**closest vectors quickly**, without comparing the query against every stored vector.
+
+**The problem they solve**
+
+The simplest way to find the nearest vectors is to compare the query with **every** stored vector:
+**brute-force** (or **flat**) search.
+
+- **Exact**: it always finds the true nearest neighbours.
+- **Slow at scale**: 100 million vectors × 3,072 numbers each is about 300 billion multiplications per
+  query.
+
+**ANN (Approximate Nearest Neighbour)** isn't one algorithm. It's the **family name** for methods that
+search only a small, smart part of the collection. They're **much faster**, at the cost of
+**occasionally missing** a true neighbour. The share of true neighbours actually found is called
+**recall** (e.g. 98%). **HNSW** and **IVF-PQ** are the two most common.
+
+**HNSW (Hierarchical Navigable Small World): a graph of neighbours**
+
+*Analogy: travelling to an address by motorway, then main roads, then local streets.*
+
+- Every vector is a point **linked to its nearby points**, like friends in a social network.
+- The graph has **layers**:
+  - the **top layer** has few points with long-distance links (motorways);
+  - **lower layers** have more points with shorter links (main roads, then streets);
+  - the **bottom layer** has every point.
+- **Search**: start at the top, jump to the neighbour closest to the query, and repeat until nothing is
+  closer. Then drop a layer and repeat with finer links. At the bottom you're in the right
+  neighbourhood and check the nearby points.
+
+```text
+Layer 2 (few points):     A ─────────────── K
+Layer 1 (more):           A ──── E ──── H ── K
+Layer 0 (all points):     A─B─C─D─E─F─G─H─I─J─K     → walk to the closest, then look around
+```
+
+- **Strengths**: very fast, very high recall. It's the default in Qdrant, Weaviate, pgvector,
+  Elasticsearch and others.
+- **Weaknesses**: **memory-hungry** (it keeps the full vectors plus all the links, usually in RAM), and
+  building the index is slow-ish.
+- **Knobs**:
+  - `M`: links per point; more means better recall and more memory.
+  - `ef` / `ef_search`: candidates explored per search; more means better recall and slower.
+
+**IVF (Inverted File Index): group first, then search only a few groups**
+
+*Analogy: a library organised by section.* To find a book about chillers you go to the "Refrigeration"
+shelves, not every shelf.
+
+- Before searching, **cluster** all vectors into, say, 1,000 groups (with k-means). Each group has a
+  **centre**.
+- **Search**: compare the query only with the 1,000 centres, open the **nearest few groups** (`nprobe`,
+  e.g. 10), and search only inside them. That's about 1% of the data.
+- **Strengths**: less memory and simpler than HNSW; scales to huge collections.
+- **Weakness**: if the true neighbour sits in a group you didn't open (near a boundary), you miss it.
+  Raise `nprobe` for better recall at the cost of speed.
+
+**PQ (Product Quantization): compress the vectors themselves**
+
+*Analogy: instead of storing a full-resolution photo of each face, store a short description* such as
+"eyes type 17, nose type 4, mouth type 92". Approximate, but tiny.
+
+- Split each long vector into pieces, e.g. 3,072 numbers into 96 pieces of 32.
+- For each piece position, learn a small "dictionary" of 256 typical patterns.
+- Store each piece as **just the number of its closest pattern**: one byte instead of 32 floats.
+- Result: a 3,072-number vector (12 KB) becomes about **96 bytes**, more than 100× smaller.
+- Distances are computed on these codes: fast and tiny, but **approximate**, so some accuracy is lost.
+
+**IVF-PQ** combines both. IVF decides **which groups to search**; PQ makes the vectors inside them
+**small**. That's how **billion-scale** search fits in memory (FAISS, Milvus). Systems commonly
+**re-score** the top few hundred candidates with the full vectors to win back accuracy.
+
+**Which one when: side by side**
+
+| | Flat (brute force) | HNSW | IVF | IVF-PQ |
+|---|---|---|---|---|
+| Idea | compare with everything | walk a layered neighbour graph | search only the nearest clusters | nearest clusters + compressed vectors |
+| Speed | slow at scale | **very fast** | fast | fast |
+| Recall | 100% (exact) | very high | good (tune `nprobe`) | lower (compression loss; re-scoring helps) |
+| Memory | full vectors | **high** (vectors + links) | full vectors | **very low** |
+| Index build | none | slow-ish, incremental inserts fine | needs a training (clustering) step | needs training (clusters + codebooks) |
+| Sweet spot | up to ~tens of thousands of vectors, or heavily filtered searches | thousands to tens of millions, when RAM allows | millions | **hundreds of millions to billions**, or tight memory |
+
+**Worked scenarios**
+
+- **A support bot over 50,000 help-article chunks.** Any method is fast; HNSW (the default) is fine, and
+  even brute force would answer in milliseconds. Don't over-engineer.
+- **E-commerce search over 5 million products, latency under 50 ms.** HNSW in RAM: about 5M × 768
+  dimensions × 4 bytes ≈ 15 GB of vectors plus graph links. That's affordable on one large node or a
+  small cluster; tune `ef` for the latency target.
+- **1 billion image embeddings.** Full vectors would be about 3 TB at 768 dimensions, too much RAM.
+  IVF-PQ shrinks them to tens of GB; re-score the top candidates with full vectors stored on disk.
+  Alternatively, a disk-based graph such as **DiskANN** keeps most of the index on SSD.
+- **A multi-tenant SaaS where every search is filtered to one customer.** Filtering matters more than
+  the algorithm. Either partition per tenant (small flat or HNSW indexes), or use a database that
+  filters *during* graph search; post-filtering a global index can leave too few results ([I25](#i25-inside-a-vector-database)).
+- **50M patient records** ([Q28](INTERVIEW-GUIDE-3-EXPERT.md#q28-rag-over-50m-patient-records-under-hipaa-inside-a-customers-vpc)): partition by patient, compress vectors (int8 or PQ), and filter by
+  access rights first.
+
+**Other names you may hear**
+
+- **Scalar quantization**: float32 → int8, about 4× smaller with little loss; a simpler cousin of PQ.
+  Qdrant, Weaviate and others support it alongside HNSW.
+- **Binary quantization**: 1 bit per dimension, about 32× smaller; very fast but rough, so it's usually
+  followed by re-scoring.
+- **DiskANN**: a graph index designed to live mostly on SSD.
+- **ScaNN** (Google): a fast ANN library combining partitioning and quantization.
+
+**Tuning trade-offs to state in an interview**
+
+- **Recall vs latency**: raising `ef` (HNSW) or `nprobe` (IVF) finds more true neighbours but takes
+  longer. Pick the point on that curve that meets the p95 latency target.
+- **Memory vs accuracy**: compression (PQ, scalar, binary) saves RAM and money and costs some recall.
+  Re-scoring with full vectors recovers most of it.
+- **Build time vs query speed**: graph indexes take longer to build; IVF needs a training step and may
+  need retraining as the data changes.
+- **Always measure on your data**: compare ANN results with exact brute-force results on a sample of
+  queries to know your real recall, and watch it as the collection grows ([E20](INTERVIEW-GUIDE-3-EXPERT.md#e20-rag-accuracy-fell-from-85-to-60-after-adding-documents)).
+
+**In PlantGuard**
+
+- Qdrant uses **HNSW** by default.
+- With only **~106 chunks**, any method is instant. Even brute force would be fine, and for small or
+  heavily filtered searches Qdrant can simply scan everything.
+- These choices start to matter at **millions** of chunks, where compression and partitioning become
+  necessary.
+
+**One line for interviews:** *"ANN trades a little recall for big speed. HNSW walks a layered graph of
+neighbours (fast and accurate, but memory-hungry); IVF searches only the nearest clusters; PQ
+compresses vectors into short codes; and IVF-PQ combines them for billion-scale search. I tune `ef` or
+`nprobe` against my latency target and verify recall against exact search."*
 
 ---
 
