@@ -1273,15 +1273,57 @@ agent. Agent memory reads and writes, so the system learns from its own past. Pl
 *Linked from [B12](#b12-embeddings-and-vector-databases).* The three terms answer three different
 questions:
 
-| Term | Question it answers | Short answer |
-|---|---|---|
-| **Vector search** | *How* do we find matches? | the **mechanism**: find the stored vectors closest to a query vector |
-| **Dense vector** | *What kind* of vector is it? | the **shape**: a short list where every position has a value |
-| **Semantic search** | *What* are we trying to achieve? | the **goal**: find things by meaning, not exact words |
+| Term | Question it answers | Short answer | Example technology |
+|---|---|---|---|
+| **Vector search** | *How* do we find matches? | the **mechanism** (the engine): find the stored vectors closest to a query vector | cosine similarity, dot product, HNSW index |
+| **Dense vector** | *What kind* of vector is it? | the **format**: a short list where every position has a value | Gemini / OpenAI / BERT text embeddings |
+| **Semantic search** | *What* are we trying to achieve? | the **goal** (the experience): find things by meaning and intent, not exact words | embedding models, LLMs, NLP |
 
 In text RAG they usually appear together, because semantic search is normally done *by* running vector
 search *over* dense vectors. That's why people use them interchangeably. But each can exist without the
 others, which is what interviewers sometimes probe.
+
+**One example end to end: "something scary to watch in space"**
+
+A user types that into a streaming app. Here's how the three ideas work together:
+
+1. **Semantic (the goal):** the system should understand that "scary" means horror, "to watch" means a
+   film or show, and "in space" means a sci-fi setting. The intent is *sci-fi horror*, even though the
+   user never typed those words.
+2. **Dense (the format):** an embedding model turns the query into a dense vector such as
+   `[0.124, -0.892, 0.441, ..., 0.003]`, where every number carries part of the meaning. A keyword
+   (sparse) index would instead look for the literal words "scary" and "space".
+3. **Vector search (the mechanism):** the database compares that vector with the stored vectors of every
+   film (embedded in advance from their descriptions) and returns the nearest ones. *Alien* (1979) comes
+   out on top, though its description never says "something scary to watch in space".
+
+In one line: **semantic** is *what* the user wants, **dense** is *how the meaning is packed into
+numbers*, and **vector search** is *how the closest match is found*.
+
+One correction to a common simplification: step 1 isn't usually a separate stage that runs first. The
+"understanding" happens **inside the embedding model** when it creates the vector in step 2, because it
+was trained so that "scary film in space" lands near "sci-fi horror". The steps are three ways of
+describing one operation, not three programs.
+
+**Together or alternatives?**
+
+They are **layers of the same search, not competing techniques**. Think of a car: semantic search is
+**what the car is for** (getting you where you mean to go), dense vectors are **the fuel** (meaning
+packed into numbers), and vector search is **the engine** (the maths that moves it).
+
+They're only *usually* together, though. Each can appear without the others:
+
+- **Vector search without semantics:** face recognition or fingerprint matching turns an image into a
+  vector and finds the nearest match. That's pure pattern matching; no language meaning is involved.
+- **Semantic search without dense vectors:** before embedding models, teams built "meaning-aware" search
+  with synonym dictionaries, hand-written rules ("chilly" → "cold"), and knowledge graphs. Primitive, but
+  semantic in intent.
+- **Vectors that aren't dense:** sparse keyword vectors (BM25) are also vectors, and some vector
+  databases store them too (see below).
+
+Today, when a team says "we built semantic search", they almost always mean: an embedding model makes
+dense vectors, and a vector database runs vector search over them, often alongside keyword search
+(hybrid).
 
 **1. Vector search: the mechanism**
 
@@ -1300,6 +1342,10 @@ A toy example with 3-number vectors:
 The mechanism itself doesn't care what the numbers mean. Vector search is also used for **images**
 (find similar photos), **products** (customers who bought this…), **audio**, and **fraud** (find
 transactions like this one). So *vector search ≠ semantic text search*; text is just one use.
+
+It can even match **across** types, such as a text query against images, but only when both were
+embedded by the **same multimodal model** (for example CLIP), so they share one space. Vectors from two
+different models can't be compared, even if they have the same length.
 
 **2. Dense vs sparse: what the vector looks like**
 
