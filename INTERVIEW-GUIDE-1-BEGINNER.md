@@ -354,7 +354,7 @@ nearest vectors, and get back the most similar chunks.
 
 People use three overlapping terms: **vector search** is the mechanism (nearest neighbours in number
 space), **dense** describes the vectors (every position has a value), and **semantic search** is the
-goal (matching meaning). They usually refer to the same thing.
+goal (matching meaning). They usually refer to the same thing. Detail with examples: [vector vs dense vs semantic search](#vector-search-vs-dense-vectors-vs-semantic-search).
 
 In PlantGuard each manual section becomes a vector of 3,072 numbers stored in Qdrant.
 
@@ -1267,6 +1267,98 @@ the fix turned out to be.
 **One line for interviews:** *"RAG reads once, chosen by code. Agentic RAG reads on demand, chosen by the
 agent. Agent memory reads and writes, so the system learns from its own past. PlantGuard today is RAG
 (default) or agentic RAG (`--agent`); M3 adds memory."*
+
+### Vector search vs dense vectors vs semantic search
+
+*Linked from [B12](#b12-embeddings-and-vector-databases).* The three terms answer three different
+questions:
+
+| Term | Question it answers | Short answer |
+|---|---|---|
+| **Vector search** | *How* do we find matches? | the **mechanism**: find the stored vectors closest to a query vector |
+| **Dense vector** | *What kind* of vector is it? | the **shape**: a short list where every position has a value |
+| **Semantic search** | *What* are we trying to achieve? | the **goal**: find things by meaning, not exact words |
+
+In text RAG they usually appear together, because semantic search is normally done *by* running vector
+search *over* dense vectors. That's why people use them interchangeably. But each can exist without the
+others, which is what interviewers sometimes probe.
+
+**1. Vector search: the mechanism**
+
+Turn every item into a list of numbers, a point in space. To search, turn the query into a point too,
+and return the stored points **closest** to it, measured by cosine similarity, dot product or distance
+(I25).
+
+A toy example with 3-number vectors:
+
+```text
+"pump bearing overheating"   → [0.81, 0.10, 0.55]
+"bearing temperature high"   → [0.78, 0.14, 0.60]   ← very close: similar meaning
+"monthly invoice summary"    → [0.05, 0.92, 0.11]   ← far away
+```
+
+The mechanism itself doesn't care what the numbers mean. Vector search is also used for **images**
+(find similar photos), **products** (customers who bought this…), **audio**, and **fraud** (find
+transactions like this one). So *vector search ≠ semantic text search*; text is just one use.
+
+**2. Dense vs sparse: what the vector looks like**
+
+- A **dense vector** comes from a neural **embedding model**. It's short and fixed-length (hundreds to
+  a few thousand numbers), and **every position holds a value**. No single position means anything on
+  its own; meaning is spread across all of them.
+
+  ```text
+  dense (3,072 numbers, all filled):   [0.012, -0.443, 0.087, 0.301, ..., -0.129]
+  ```
+
+- A **sparse vector** has one position per **word in the vocabulary** (tens of thousands of positions),
+  and **almost all are zero**. Only the words that appear in the text get a value, such as a BM25 or
+  TF-IDF weight.
+
+  ```text
+  sparse (one slot per vocabulary word, nearly all 0):
+    "bearing": 2.1   "overheating": 3.4   "pump": 1.2   (every other word: 0)
+  ```
+
+The difference in behaviour is the key interview point:
+
+- **Dense** matches **meaning**: "machine cut out" finds "unit tripped", though they share no words. But
+  it blurs exact codes (`VPW-P-00043` vs `VPW-P-00034` look almost the same).
+- **Sparse** matches **exact words**: perfect for part numbers and fault codes, blind to synonyms.
+
+That's why **hybrid search** combines both (I17). Sparse vectors can be stored and searched in vector
+databases too (Qdrant supports them), so "vector search" isn't automatically "dense". There are also
+**learned sparse** models (such as SPLADE) that add related words to the sparse vector, getting some
+meaning-matching while keeping exact-word strengths.
+
+**3. Semantic search: the goal**
+
+Semantic search means "find what the user **means**". Dense vector search is the usual way to do it,
+but not the only one:
+
+- learned sparse models (SPLADE) can do it;
+- an LLM or cross-encoder **reranker** judges meaning directly;
+- a **knowledge graph** finds related concepts by their relationships.
+
+And the reverse: dense vector search isn't always "semantic" in the language sense. An image-similarity
+or user-behaviour embedding finds *similar*, not *same meaning*.
+
+**In PlantGuard**
+
+| Part | Which term |
+|---|---|
+| `gemini-embedding-001` turns each manual section into **3,072 numbers** | **dense** vectors |
+| Qdrant finds the nearest vectors by **cosine** similarity (`Distance.COSINE`) | **vector search** |
+| "making a funny noise, then cut out" finds the chiller's *fault-code* section | **semantic search** (the goal achieved) |
+| M4's BM25 index matches `VPW-P-00043` and `VIB_TRIP` exactly | **sparse** keyword search (kept in memory, not in Qdrant) |
+| M4 hybrid mode fuses both lists with RRF, then an LLM reranks | **hybrid** + LLM reranking for meaning |
+
+See I45 for where each of these sits among all retrieval strategies.
+
+**One line for interviews:** *"Vector search is the mechanism (nearest neighbours), dense vs sparse is
+the representation (meaning spread over every position vs one slot per word), and semantic search is
+the goal. In text RAG, semantic search is usually done with vector search over dense embeddings, and
+combined with sparse keyword search for exact terms."*
 
 ---
 
