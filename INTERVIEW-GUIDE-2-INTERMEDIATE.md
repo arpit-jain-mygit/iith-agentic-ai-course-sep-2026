@@ -57,6 +57,7 @@ in practice. A small "I've seen this go wrong when..." story is worth more than 
 | [I43](#i43-agent-deployment-patterns) | Agent deployment patterns | Book · AI Engineering (DailyDoseofDS) |
 | [I44](#i44-mcp-in-depth-primitives-discovery-and-tool-overload) | MCP in depth: primitives, discovery and tool overload | Book · AI Engineering (DailyDoseofDS) |
 | [I45](#i45-retrieval-strategies-the-full-map) | Retrieval strategies: the full map | Extra · interview prep (consolidated) |
+| [I46](#i46-evals-the-full-map) | Evals: the full map | Extra · interview prep (consolidated) |
 
 ---
 
@@ -1581,6 +1582,161 @@ PlantGuard's H4 compares dense, hybrid and rerank.
 **One line for interviews:** *"I group retrieval strategies by where they act: how documents are chunked
 and indexed, how the query is reformulated, how search runs, and how results are reranked and
 diversified. Then I pick by the failure I measure, not by what's fashionable."*
+
+## I46. Evals: the full map
+
+*Typical question: "How do you evaluate an LLM application end to end?"*
+
+"Evals" are repeatable tests of how well an AI system does its job ([B26](INTERVIEW-GUIDE-1-BEGINNER.md#b26-evals-beyond-the-golden-set)). The trick, as with retrieval
+([I45](#i45-retrieval-strategies-the-full-map)), is to see the whole map: **what** you evaluate, **how** you score it, **when** you run it, and
+**what you test it on**. This topic is that map, plus the pieces not covered elsewhere.
+
+**1. What to evaluate: one layer at a time**
+
+| Layer | Question | Typical metrics | Detail |
+|---|---|---|---|
+| **Retrieval** | did we find the right material? | recall@k, precision@k, MRR, nDCG | [I19](#i19-measuring-retrieval-and-rag-quality) |
+| **Generation** | is the answer correct, grounded, complete? | correctness vs reference, faithfulness, relevance, citation accuracy | [E9](INTERVIEW-GUIDE-3-EXPERT.md#e9-checking-groundedness-at-scale-llm-as-judge), [E19](INTERVIEW-GUIDE-3-EXPERT.md#e19-validating-answers-in-production-when-theres-no-ground-truth) |
+| **Structured output** | is the shape and content right? | schema validity, field-level accuracy, F1 for extraction | [B5](INTERVIEW-GUIDE-1-BEGINNER.md#b5-structured-output), [I4](#i4-valid-json-isnt-a-correct-answer) |
+| **Agent behaviour** | right tools, right order, no loops? | task success, tool-choice accuracy, steps per task, trajectory checks | [E21](INTERVIEW-GUIDE-3-EXPERT.md#e21-evaluating-a-multi-agent-system) |
+| **Safety** | does it refuse, escalate and resist attacks? | attack success rate, refusal correctness, PII leaks | [E7](INTERVIEW-GUIDE-3-EXPERT.md#e7-prompt-injection), [E28](INTERVIEW-GUIDE-3-EXPERT.md#e28-llm-security-beyond-prompt-injection--and-privacy-patterns) |
+| **Performance and cost** | fast and cheap enough? | TTFT, p95 latency, tokens and cost per task | [I40](#i40-measuring-llm-speed-ttft-tpot-and-throughput), [E18](INTERVIEW-GUIDE-3-EXPERT.md#e18-cutting-llm-costs-without-killing-quality) |
+| **Business outcome** | does it actually help? | resolution rate, time saved, escalation rate, conversion | [E19](INTERVIEW-GUIDE-3-EXPERT.md#e19-validating-answers-in-production-when-theres-no-ground-truth) |
+
+Measuring each layer separately is what lets you find **which part** broke ([E17](INTERVIEW-GUIDE-3-EXPERT.md#e17-debugging-a-wrong-answer-in-production)).
+
+**2. How to score: the ladder from cheapest to most expensive**
+
+1. **Programmatic checks**: exact match, regex, schema validation, "does the code compile or the tests
+   pass", "does the cited document exist". Free, exact, deterministic. **Use these wherever you can.**
+2. **Reference-based similarity**: compare the output with a reference answer (metrics below).
+3. **LLM-as-judge**: a model scores against a rubric, with or without a reference ([E9](INTERVIEW-GUIDE-3-EXPERT.md#e9-checking-groundedness-at-scale-llm-as-judge); calibration in
+   [bank Q19](INTERVIEW-GUIDE-3-EXPERT.md#q19-llm-as-a-judge-failure-modes-and-calibration)).
+4. **Human review**: the gold standard, used to calibrate the judge and for the hardest cases.
+
+**Classic text metrics, and why they fit LLMs poorly**
+
+| Metric | What it measures | Typical use | Limitation for LLM apps |
+|---|---|---|---|
+| **Exact match** | identical to the reference | short factual answers, IDs, labels | any valid rephrasing scores 0 |
+| **Token F1** | word overlap with the reference | extractive QA | still punishes good paraphrases |
+| **BLEU** | n-gram *precision* vs reference | machine translation | rewards copying wording, not meaning |
+| **ROUGE** | n-gram *recall* vs reference | summarisation | same wording bias; misses factual errors |
+| **BERTScore** | similarity of token embeddings | paraphrase-tolerant comparison | similar meaning ≠ correct facts |
+
+LLMs can say the right thing in many valid ways, so wording-overlap metrics give misleading scores.
+They're fine for constrained outputs (labels, IDs, extracted fields). For open-ended answers, use rubrics,
+groundedness checks and judges.
+
+**Task-specific metrics**
+
+- **Classification and extraction:** accuracy, precision, recall and F1 per field or class. Use
+  **macro-F1** and the critical class's recall when classes are imbalanced ([bank Q21](INTERVIEW-GUIDE-3-EXPERT.md#q21-micro-vs-macro-f1-on-imbalanced-data)).
+- **Code generation:** **pass@k**, the chance that at least one of *k* generated attempts passes the
+  unit tests. pass@1 is what users feel; pass@10 shows potential with retries.
+- **Retrieval:** recall@k, MRR, nDCG ([I19](#i19-measuring-retrieval-and-rag-quality)).
+- **Routing:** accuracy and confusion matrix of "which path or agent was chosen" ([E21](INTERVIEW-GUIDE-3-EXPERT.md#e21-evaluating-a-multi-agent-system)).
+
+**3. When to run evals**
+
+```text
+ develop ─▶ pre-release gate ─▶ shadow / canary ─▶ production (online)
+ quick       full golden set      new vs current     judge on sampled traffic,
+ iteration   + regression         on real traffic    user feedback, business metrics,
+ on subsets  thresholds in CI     before rollout     drift alerts → new golden cases
+```
+
+- **Offline** (before users see it): fast feedback, comparable over time, blocks regressions ([E23](INTERVIEW-GUIDE-3-EXPERT.md#e23-llmops-from-raw-data-to-serving-to-feedback),
+  [bank Q22](INTERVIEW-GUIDE-3-EXPERT.md#q22-catch-regressions-when-a-prompt-or-model-changes-and-roll-back-safely)).
+- **Online** (in production): reality, with real queries, users and drift. There's often no ground
+  truth, so lean on layered checks ([E19](INTERVIEW-GUIDE-3-EXPERT.md#e19-validating-answers-in-production-when-theres-no-ground-truth)).
+- Close the loop: **production failures become new golden cases**.
+
+**4. Building a golden set that's worth trusting**
+
+- **Size:** start with **50–200** cases; enough to see real differences. Remember the noise: at 100
+  cases, an 80% score has a margin of roughly **±8 points** (95% confidence), so a 3-point "improvement"
+  may be nothing ([E10](INTERVIEW-GUIDE-3-EXPERT.md#e10-proving-one-rag-pipeline-beats-another)).
+- **Sources, in order of value:**
+  1. **real production or user queries** (anonymised);
+  2. **past failures and incidents**;
+  3. **expert-written** cases for important scenarios;
+  4. **adversarial and edge cases** (empty input, contradictions, out-of-scope, injection attempts);
+  5. **synthetic** cases (LLM-generated variations), always **human-checked** before use.
+- **Coverage:** tag every case with a **category** (by task type, difficulty, risk) and report results
+  **per category**. An average hides a broken category.
+- **Labelling:** write **guidelines** for what counts as correct, and have two people label a sample.
+  Measure **inter-annotator agreement** (e.g. Cohen's kappa); if humans disagree, the task or rubric is
+  unclear, and no model or judge can score it reliably.
+- **Hygiene:**
+  - keep a **held-out** subset you never tune prompts on, to catch overfitting;
+  - **version** the set with its labels;
+  - never reuse eval cases as few-shot examples in the prompt (leakage);
+  - **refresh** it as products, documents and users change.
+
+**5. Multi-turn and conversation evals**
+
+A chatbot or agent is judged over a **whole conversation**, not one reply:
+
+- **Conversation-level metrics:**
+  - task completed?
+  - turns to resolution;
+  - **context retention** (does it remember what the user said five turns ago?);
+  - consistency (does it contradict itself?);
+  - handling corrections ("no, I meant the other order").
+- **Turn-level metrics** still apply to each answer: groundedness, relevance, safety.
+- **How to test at scale:**
+  - **scripted conversations** for regressions;
+  - **simulated users**: an LLM plays a customer with a persona and a goal (an impatient user, a
+    confused one, a manipulative one), and you evaluate the transcripts.
+
+**6. Red-teaming as a structured eval**
+
+Safety isn't a one-off review. Treat it as a test suite that runs on every release:
+
+- **Attack categories:**
+  - prompt injection (direct and inside documents);
+  - jailbreaks;
+  - PII and secret extraction;
+  - harmful or unsafe advice;
+  - policy bypass ("skip the paperwork");
+  - tool misuse (getting the agent to take an unauthorised action).
+- **Metric:** **attack success rate** per category, which should trend to zero. Also **over-refusal
+  rate**: refusing legitimate requests is a failure too.
+- **How:**
+  - automated generators and scanners (promptfoo's red-team mode, Microsoft PyRIT, garak) for breadth;
+  - human red-teamers for creative, novel attacks;
+  - every successful attack becomes a permanent test case.
+
+**7. Tooling you may be asked about**
+
+| Tool | What it's for |
+|---|---|
+| **RAGAS** | RAG metrics: faithfulness, answer relevancy, context precision and recall |
+| **DeepEval** | pytest-style LLM test cases with ready metrics (incl. **G-Eval**, hallucination, faithfulness) |
+| **G-Eval** | an LLM-judge method: the judge writes evaluation steps (chain of thought), then fills in a score form; scores weighted by token probabilities |
+| **promptfoo** | YAML test matrices across prompts × models × cases; assertions; red-teaming |
+| **LangSmith / LangFuse / Arize Phoenix** | datasets, experiments comparing versions, online scoring tied to traces |
+| **OpenAI Evals, Inspect** | frameworks for building and running eval suites |
+
+Tools change quickly; the concepts above don't. Interviewers care more that you know *what* to measure
+and *how to trust the numbers*.
+
+**8. PlantGuard's eval ladder**
+
+| Level | What it evaluates | How |
+|---|---|---|
+| **M1 intake** | LLM parsing of free-text logs | `intake.py --parse-batch`: parsed fields vs the event's structured readings (7/10 on a first batch) |
+| **R7 / H4 retrieval** | did search return the documents that must be cited? | `golden_set.json` `must_cite`: recall, precision and MRR per search mode (dense 86% → rerank 89% recall, MRR 0.91 → 0.95) |
+| **LLM decision** | priority, safety-critical and permit vs ground truth | `llm_step.py --evaluate`: compares with each event's `ground_truth`, read only *after* the model answers |
+| **Runtime checks** | every decision, in production too | L5 citation check + P4 guards (invented parts, permit contradictions, ignored suspect readings, overconfidence) |
+| **H5 groundedness** (M4) | are the fault, steps and parts supported by the cited sections? | LLM judge over FACTS + cited chunks; ungrounded claims are a critical flag |
+| **M8 golden set** | end-to-end, incl. refusals | 20 scenarios leaning on ambiguity and adversarial input (e.g. "skip the paperwork", impossible readings); `expected_route`, `must_cite` and `must_not_contain` checks |
+
+**One line for interviews:** *"I evaluate each layer separately (retrieval, generation, agent behaviour,
+safety, cost), score with the cheapest reliable method first (programmatic checks, then judges calibrated
+against humans), run a versioned golden set as a release gate plus online checks in production, and turn
+every production failure and successful attack into a new test case."*
 
 ---
 

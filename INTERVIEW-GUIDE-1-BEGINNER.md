@@ -660,6 +660,8 @@ Different evals answer different questions:
 A beginner-level answer that impresses: *"I'd start with 30 real examples and simple checks, run it on
 every change, and grow it from real failures."*
 
+The complete picture (layers, scoring methods, golden-set building, red-teaming, tools): [I46](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i46-evals-the-full-map).
+
 ## B27. Observability
 
 **Observability** means being able to see what your AI system actually did, so that when something goes
