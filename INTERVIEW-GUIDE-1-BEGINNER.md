@@ -354,7 +354,7 @@ nearest vectors, and get back the most similar chunks.
 
 People use three overlapping terms: **vector search** is the mechanism (nearest neighbours in number
 space), **dense** describes the vectors (every position has a value), and **semantic search** is the
-goal (matching meaning). They usually refer to the same thing. Detail with examples: [vector vs dense vs semantic search](#vector-search-vs-dense-vectors-vs-semantic-search).
+goal (matching meaning). They usually refer to the same thing. Detail with examples: [vector vs dense vs semantic search](#vector-search-vs-dense-vectors-vs-semantic-search). How all the search types fit together: [the search map](#how-all-the-search-types-fit-together).
 
 In PlantGuard each manual section becomes a vector of 3,072 numbers stored in Qdrant.
 
@@ -383,7 +383,7 @@ There are two basic ways to search text:
 Neither is better overall; they fail in opposite places. That's why production systems often combine
 them (hybrid search, [I17](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i17-hybrid-search)). A nice interview example: *"if a technician searches a part number, I want
 keyword search; if they describe a symptom in their own words, I want semantic search."*
-How keyword scoring actually works: [BM25 explained simply](#bm25-explained-simply).
+How keyword scoring actually works: [BM25 explained simply](#bm25-explained-simply). How all the search types fit together: [the search map](#how-all-the-search-types-fit-together).
 
 ## B15. Hallucination and groundedness
 
@@ -1501,6 +1501,105 @@ above (saturation and length normalisation), which is why it replaced TF-IDF as 
 giving diminishing returns for repeats, and normalising for length. It's excellent for exact terms like
 part numbers and blind to synonyms, which is why it's paired with dense vector search in hybrid
 retrieval."*
+
+### How all the search types fit together
+
+*Linked from [B12](#b12-embeddings-and-vector-databases) and [B14](#b14-keyword-vs-semantic-search).*
+Dense, semantic, sparse, vector, BM25, hybrid, reranking, the LLM deciding with tools: these aren't eight
+competing techniques. They answer **four different questions**, stacked in layers.
+
+**The map**
+
+| Question | Options | Term(s) |
+|---|---|---|
+| **1. How is meaning represented?** | as exact words, or as a dense list of numbers | **sparse** (words) vs **dense** (embedding) |
+| **2. How are matches found?** | count matching words, or measure the distance between vectors | **BM25** (keyword scoring on sparse) vs **vector search** (nearest neighbours on dense) |
+| **3. Use one or both?** | run both and merge the lists | **hybrid** (merged with RRF) |
+| **4. How do we pick the final few?** | read each candidate against the question | **reranking** (cross-encoder or LLM) |
+| **Around all of it: who triggers the search?** | our code, once; or the LLM, via a tool, whenever it wants | **RAG** vs **LLM decides with tools** (agentic RAG) |
+
+And **semantic** isn't a step at all. It's the **goal**: matching meaning. Dense vector search is the
+usual way to get it.
+
+**Analogy: hiring for a job**
+
+- **BM25 (sparse)** is a recruiter scanning CVs for exact keywords: "Kafka", "AWS", "10 years". Fast and
+  precise, but misses someone who wrote "event streaming" instead of "Kafka".
+- **Vector search (dense)** is a recruiter who reads for meaning and spots that "event streaming
+  platform" means Kafka experience. Smart, but may overlook an exact certification name.
+- **Hybrid** puts *both* shortlists together, so candidates strong on either list get through.
+- **Reranking** is the interview panel: it looks closely at the merged shortlist and picks the best few.
+- **The LLM deciding with tools** is the hiring manager deciding *when* to open a search, *what* role to
+  search for, and whether to search again.
+
+**One example going through every layer**
+
+A technician writes: *"CHILLER-01 tripped again on HP_TRIP with a whining noise. Is part VPW-P-00043
+involved?"*
+
+```text
+① WHO SEARCHES?   The agent (LLM) decides to call
+                  search_manuals("HP_TRIP whining noise VPW-P-00043", CHILLER)   ← LLM tool decision
+                        │
+② TWO SEARCHES RUN SIDE BY SIDE
+   ┌────────────────────────────────┐   ┌──────────────────────────────────────┐
+   │ SPARSE / BM25 (exact words)    │   │ DENSE / VECTOR SEARCH (meaning)       │
+   │ finds chunks containing        │   │ query → [0.12, -0.89, 0.44, ...]      │
+   │ "HP_TRIP", "VPW-P-00043"       │   │ finds "high condenser pressure",       │
+   │  → spare-parts list,           │   │ "fan motor noise" sections             │
+   │    alarm code table            │   │  → fault-code table, operating ranges  │
+   └────────────────────────────────┘   └──────────────────────────────────────┘
+                        │  (this half = SEMANTIC search: the goal)
+③ HYBRID          merge both lists with RRF → ~20 candidates, each found by either side
+                        │
+④ RERANK          LLM reads question + each candidate → keeps the best 6
+                  (fault-code table 1.0, spare-parts list 0.8, ...)
+                        │
+⑤ BACK TO AGENT   the agent reads the 6 sections; it may decide to search AGAIN:
+                  search_manuals("permit for pressure system work")   ← LLM tool decision
+```
+
+What each piece contributed:
+
+- **BM25** caught the exact part number and alarm code, which dense search tends to blur.
+- **Vector search** caught "whining noise" ≈ "fan motor bearing noise", which BM25 can't see.
+- **Hybrid** made sure both kinds of match were in the candidate pool.
+- **Rerank** put the truly useful sections first.
+- **The LLM's tool decision** chose to search at all, and to search a second time for permits.
+
+*(Scores and section names above are illustrative.)*
+
+**Who decides which search to use: app code or the LLM?**
+
+In most systems, **app code**, and usually nobody has to decide per query at all. The four patterns:
+
+| Who decides | How | Example |
+|---|---|---|
+| **Nobody: always both** (most common) | run BM25 + dense every time, fuse with RRF | PlantGuard hybrid; typical Elasticsearch, OpenSearch and Qdrant hybrid setups |
+| **Code, by weighting** | a fixed weight between keyword and vector scores (e.g. Weaviate's `alpha`: 0 = pure keyword, 1 = pure vector) | tuned once on a golden set |
+| **Code, by rules** | a query router: "looks like a part number or ID (regex)? → keyword-heavy; long natural sentence? → semantic" | cheap, predictable, easy to test |
+| **LLM decides** | agentic RAG: the agent has separate tools (`search_by_keyword`, `search_by_meaning`, `lookup_part`) and picks; or **self-query**, where the LLM turns the question into filters + search text | flexible, but costs a call, and needs evaluation |
+
+Even in the LLM-decides case, the LLM usually chooses *whether* and *what* to search. The search method
+inside the tool is still code. In a rerank step, the LLM only scores relevance; it never picks the
+method.
+
+**Where PlantGuard stands on each piece**
+
+| Piece | In PlantGuard |
+|---|---|
+| Dense + vector search | Gemini embeddings in Qdrant (since R1–R7) |
+| Sparse / BM25 | M4 H1, in memory |
+| Hybrid (RRF) | M4 H2 |
+| LLM rerank | M4 H3 |
+| Which mode runs | **code**: the `SEARCH_MODE` setting in `search_best()`, chosen from the H4 measurements |
+| LLM decides via tools | M2 agent (`--agent`, the `search_manuals` tool) |
+| Code decides, one search | default triage path (`retrieve()` in L2) |
+
+**One line for interviews:** *"Sparse versus dense is the representation; BM25 versus vector search is
+the matching method; hybrid runs both and fuses them; reranking picks the final few; and the search is
+triggered either by code (RAG) or by the LLM through a tool (agentic RAG). Semantic is the goal, not a
+step. Usually code runs both searches every time, so nobody has to choose."*
 
 ---
 
