@@ -145,6 +145,107 @@ External services, used across every numbered step above: Gemini (via LiteLLM -
 all LLM calls + embeddings), Qdrant Cloud (vector search), LangFuse (optional tracing).
 ```
 
+## Horizontal (step-flow) view
+
+Same system, laid out left-to-right by step order instead of nested boxes.
+
+```
+═══════════════════════════ CORE TRIAGE PIPELINE (steps 1-12) ═══════════════════════════
+
+┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────────┐   ┌──────────────────┐
+│  STEP 1  │   │  STEP 2  │   │  STEP 3  │   │   STEP 4-7   │   │    STEP 8-12      │
+│ intake.py│──▶│ facts.py │──▶│ memory.py│──▶│  llm_step.py │──▶│    decide.py       │
+│   (M1)   │   │ (L1, 1-13│   │ M3 read  │   │ 4 L2 retrieve│   │ 8  P1 triage       │
+│ LLM parse│   │ JSON-only│   │ (recall  │   │ 5 L3/L4 LLM  │   │ 9  P2 parts        │
+│ raw text │   │  facts)  │   │  past    │   │   call       │   │ 10 P3 techs        │
+│ -> event │   │          │   │ triages) │   │ 6 L5 citation│   │ 11 P4 guards       │
+│          │   │          │   │          │   │   guard      │   │ 12 P5 route        │
+│          │   │          │   │          │   │ 7 H5 ground- │   │                     │
+│          │   │          │   │          │   │   edness     │   │                     │
+└──────────┘   └──────────┘   └──────────┘   └──────────────┘   └─────────┬───────────┘
+      ▲               ▲             ▲▼              ▲▼                     │
+  records.jsonl   mock API JSON   Qdrant:        Qdrant:                   │
+                  tables          equipment_     plantguard_docs           │
+                                  memory          (M4, via                 │
+                                                   rag_ingest.py)           │
+                                                                            │
+                                                                            ▼
+═══════════════════ STEP 13: ORCHESTRATION (pick ONE path) ═══════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  PATH A: graph.py (M5)                                                       │
+│                                                                               │
+│  ┌──────────┐   ┌──────────┐   ┌──────────────────────────────────────┐    │
+│  │ STEP 13a │──▶│ STEP 14  │──▶│           STEP 15 (branch)             │    │
+│  │ re-runs  │   │conditional│   │  auto ──▶ 15a: log + done              │    │
+│  │ steps    │   │ branch on │   │           (no pause)                   │    │
+│  │ 1-12 as  │   │ route     │   │                                        │    │
+│  │ 4 graph  │   │           │   │  else ──▶ 15b: interrupt() pause,      │    │
+│  │ nodes    │   │           │   │           SqliteSaver checkpoint,      │    │
+│  │          │   │           │   │           resume --approve/--reject    │    │
+│  └──────────┘   └──────────┘   └──────────────────┬─────────────────────┘    │
+└──────────────────────────────────────────────────┬┴────────────────────────┘
+                                                      │
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  PATH B: team.py (M6) - 5 named agents                                       │
+│                                                                               │
+│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────────────────┐     │
+│  │ STEP 13b │──▶│ STEP 14  │──▶│ STEP 15  │──▶│       STEP 16          │     │
+│  │ 1 Log    │   │ 4 Safety │   │ route    │   │ 5 Procurement           │     │
+│  │  Intake  │   │  Reviewer│   │ re-check │   │  raises POs via         │     │
+│  │ 2 Manual │   │ (fires   │   │ (only    │   │  mcp_server.py:         │     │
+│  │  RAG     │   │  only if │   │ "auto"   │   │   16a check_stock       │     │
+│  │ 3 Maint. │   │  safety/ │   │ proceeds)│   │   16b raise_purchase_   │     │
+│  │  Recomm- │   │  permit) │   │          │   │        order (idem-     │     │
+│  │  endation│   │ unsafe ⇒ │   │          │   │        potent)          │     │
+│  │ (re-runs │   │ critical │   │          │   │  GATED: route must be   │     │
+│  │  1-12)   │   │  flag    │   │          │   │  "auto" (M8 guardrail)  │     │
+│  └──────────┘   └──────────┘   └──────────┘   └───────────┬─────────────┘     │
+└───────────────────────────────────────────────────────────┬───────────────────┘
+                                                              │
+                     ┌────────────────────────────────────────┘
+                     ▼
+            ┌─────────────────────┐
+            │       STEP 17        │
+            │ memory.py write (M3) │
+            │ every live run, both │
+            │ paths; skipped on    │
+            │ unmatched asset or   │
+            │ replay               │
+            └─────────────────────┘
+
+─────────────────────── CROSS-CUTTING, every step 13-16 (M7) ───────────────────────
+  tracing.py: @observe wraps steps 13-16 (LangFuse, no-ops without keys)
+  reliability.py: @with_retries + CircuitBreaker wrap step 2 (sensor_feed) and
+                   steps 16a/16b (erp) - raises ServiceUnavailable, never a silent default
+
+
+═══════════════════════════ Q&A + EVAL + API (M8) ═══════════════════════════
+
+┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+│   STEP A-A2  │   │    STEP B    │   │    STEP C     │
+│   qa.py      │──▶│   qa.py      │   │ eval_golden.py│
+│ A  retrieve  │   │ answer (RAG  │   │ 20 golden     │
+│ A2 guardrail │   │  + guard-    │   │ cases, each   │
+│    classify  │   │  rail)       │◀──│ checks route +│
+│    route     │   │              │   │ must_cite +   │
+│              │   │              │   │ must_not_     │
+│              │   │              │   │ contain       │
+└──────────────┘   └──────────────┘   └──────────────┘
+       ▲
+       │
+┌──────┴───────────────────────────────────────────────┐
+│                     api.py (FastAPI)                  │
+│  STEP X: POST /triage/{id}  ──▶ team.py (step 13b)    │
+│  STEP Y: POST /ask          ──▶ qa.py (steps A-B)      │
+│  STEP Z: GET  /status       ──▶ Qdrant health, memory  │
+│                                 count, POs, breakers    │
+└─────────────────────────────────────────────────────────┘
+
+External services used across every step above: Gemini (via LiteLLM - all LLM
+calls + embeddings), Qdrant Cloud (vector search), LangFuse (optional tracing).
+```
+
 ## Milestone -> file map
 
 | Milestone | Files |
