@@ -285,6 +285,11 @@ def technician_filter(out: dict, triage: dict) -> dict:
 #   trip_disagreement             warning   step 4 (alarm string) and the LLM disagree on is_trip
 #   overconfident_on_missing_data warning   confidence "high" although readings are missing
 #                                           or there is no pre-event telemetry
+#   ungrounded_claims             critical  H5 judge: a claim (fault, action, part, safety)
+#                                           is not supported by FACTS or the cited chunks
+#                                           (a fabricated repair step is a safety hazard)
+#                                           one flag per unsupported claim; skipped when
+#                                           out["groundedness"] is absent or JUDGE_ENABLED=False
 #
 # NOT checked here: whether priority / safety / permit are CORRECT. That needs
 # the documents (LLM side) and evaluation; P4 only checks what JSON can verify.
@@ -315,6 +320,12 @@ def run_guards(out: dict, triage: dict, parts: dict, techs: dict) -> list[dict]:
                           f"cited documents that were not retrieved: {cited}"))
     if not decision["citations"]:
         flags.append(flag("no_citations", "warning", "the decision cites no document"))
+
+    # Groundedness (H5 judge)
+    groundedness = out.get("groundedness") or {}
+    for claim in groundedness.get("unsupported", []):
+        flags.append(flag("ungrounded_claims", "critical",
+                          f"not supported by FACTS or the cited documents: {claim}"))
 
     # Parts (P2)
     for number in parts["not_in_inventory"]:

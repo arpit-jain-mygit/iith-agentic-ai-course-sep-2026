@@ -83,7 +83,7 @@ def retrieve(prompt_facts: dict) -> list[dict]:
     """Chunks for this event: the asset's manual + plant-wide procedures."""
     asset = prompt_facts["asset"]
     code = asset["asset_code"] if asset else prompt_facts["event"]["asset_code"]
-    chunks = search_split(get_client(), build_query(prompt_facts), asset_code=code)
+    chunks = search_split(get_client(), build_query(prompt_facts), asset_code=code)   # TODO H6: search_best
     logger.info("L2: %d chunks: %s", len(chunks),
                 "; ".join(f"{c['file']} | {c['section'][:35]}" for c in chunks))
     return chunks
@@ -187,6 +187,106 @@ def invalid_citations(decision: LLMDecision, chunks: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# H5 (M4): groundedness check (LLM as judge)
+#
+# IN SHORT: L5 checks that each citation EXISTS; H5 checks that what the
+# decision SAYS is actually SUPPORTED by what it cites. A second LLM call
+# (the judge) gets:
+#   - the claims to check: probable_fault, each recommended action, each
+#     fault part, and the safety / permit decision
+#   - the evidence: FACTS + only the CITED chunks (full text)
+# and returns, per claim: supported yes/no, and which evidence backs it.
+#   output: {"score": supported / checked (0-1), "checked": n,
+#            "unsupported": [claim, ...], "claims": [...]}
+#
+# Why: "a fabricated repair step is a safety hazard" (M4). A decision can
+# cite a real section and still invent a torque value or a step that the
+# section never mentions; only reading claim against source catches that.
+#
+# Judge rules are generic (supported / not supported by the given text);
+# no plant rules are coded. Code computes the score and decides what to do
+# with it (decide.py P4 flag), the judge only labels claims.
+# JUDGE_ENABLED = False skips the extra call (score None) e.g. on a tight
+# free-tier quota.
+# ---------------------------------------------------------------------------
+JUDGE_ENABLED = True
+
+
+class ClaimCheck(BaseModel):
+    claim: str                    # the claim, as given to the judge
+    supported: bool               # backed by FACTS or a cited document
+    evidence: str | None = None   # "FACTS" or the document number, e.g. "[2]"
+
+
+class GroundednessReport(BaseModel):
+    claims: list[ClaimCheck]
+
+
+JUDGE_PROMPT = """You are a fact-checking judge for a maintenance triage decision.
+
+You are given EVIDENCE (a FACTS block and numbered DOCUMENTS excerpts) and a list of CLAIMS
+made by another model. For each claim, decide whether the EVIDENCE actually supports it.
+
+Rules:
+- A claim is supported only if the EVIDENCE states it. Do not use outside knowledge of
+  maintenance or this kind of equipment to decide a claim is "probably right".
+- evidence must name the exact source: "FACTS" when it comes from the FACTS block, or the
+  document number in brackets (e.g. "[2]") when it comes from a DOCUMENTS excerpt.
+- If nothing in the EVIDENCE covers a claim, mark it not supported and leave evidence null.
+- Judge every claim given, in the same order, one ClaimCheck per claim. Do not add, merge or
+  skip claims.
+- Return JSON matching the schema exactly."""
+
+
+def claims_to_check(decision: LLMDecision) -> list[str]:
+    """The decision's checkable statements, one string each: probable_fault, each
+    recommended action, each fault part, and the safety / permit decision."""
+    claims = [f"probable fault: {decision.probable_fault}"]
+    claims += [f"recommended action: {action}" for action in decision.recommended_actions]
+    claims += [f"fault part needed: {part}" for part in decision.fault_parts]
+    permit = f", permit type {decision.permit_type}" if decision.permit_type else ""
+    claims.append(f"safety_critical={decision.safety_critical}, "
+                  f"requires_permit={decision.requires_permit}{permit}")
+    return claims
+
+
+def cited_chunks(decision: LLMDecision, chunks: list[dict]) -> list[dict]:
+    """The retrieved chunks the decision actually cites."""
+    cited = {(c.file, c.section) for c in decision.citations}
+    return [c for c in chunks if (c["file"], c["section"]) in cited]
+
+
+def build_judge_prompt(prompt_facts: dict, evidence_chunks: list[dict], claims: list[str]) -> str:
+    """FACTS + numbered DOCUMENTS (cited chunks only) + the claims to judge."""
+    facts_block = json.dumps(prompt_facts, indent=1)
+    docs_block = "\n\n".join(
+        f"[{i}] file: {c['file']} | section: {c['section']}\n{c['text']}"
+        for i, c in enumerate(evidence_chunks, start=1)) or "(no cited documents)"
+    claims_block = "\n".join(f"- {c}" for c in claims)
+    return f"FACTS:\n{facts_block}\n\nDOCUMENTS:\n{docs_block}\n\nCLAIMS:\n{claims_block}"
+
+
+def check_groundedness(decision: LLMDecision, prompt_facts: dict, chunks: list[dict]) -> dict:
+    """Judge every claim against FACTS + cited chunks; score = supported share."""
+    claims = claims_to_check(decision)
+    if not JUDGE_ENABLED:
+        logger.info("H5: judge disabled, skipping groundedness check")
+        return {"score": None, "checked": len(claims), "unsupported": [], "claims": []}
+
+    evidence = cited_chunks(decision, chunks)
+    user_prompt = build_judge_prompt(prompt_facts, evidence, claims)
+    report = call_structured(JUDGE_PROMPT, user_prompt, GroundednessReport)
+
+    unsupported = [c.claim for c in report.claims if not c.supported]
+    score = (sum(c.supported for c in report.claims) / len(report.claims)
+             if report.claims else None)
+    logger.info("H5: %d/%d claim(s) supported%s", len(report.claims) - len(unsupported),
+                len(report.claims), f"; unsupported: {unsupported}" if unsupported else "")
+    return {"score": score, "checked": len(report.claims),
+            "unsupported": unsupported, "claims": [c.model_dump() for c in report.claims]}
+
+
+# ---------------------------------------------------------------------------
 # L6: run one event end to end
 #
 # --evaluate reads the event's ground_truth ONLY here, AFTER the model has
@@ -224,12 +324,15 @@ def run(event_id: str | None = None, evaluate: bool = False) -> dict:
     else:
         logger.info("L5: %d citation(s), all valid: %s", len(decision.citations), cited)
 
+    groundedness = check_groundedness(decision, prompt_facts, chunks)   # H5
+
     out = {
         "record_id": facts["record_id"],
         "decision": decision.model_dump(),
         "invalid_citations": bad,
         "chunks": [{k: c[k] for k in ("file", "section", "pages", "score", "source")} for c in chunks],
         "facts": facts,
+        "groundedness": groundedness,
     }
     if evaluate:
         out["evaluation"] = evaluate_against_truth(facts["record_id"], decision)
@@ -347,7 +450,7 @@ def tool_find_technicians(ctx: AgentContext, asset_tag: str, certification: str 
 
 def tool_search_manuals(ctx: AgentContext, query: str, asset_code: str | None = None) -> dict:
     """Relevant manual / procedure sections (RAG): the class manual + plant-wide procedures."""
-    chunks = search_split(ctx.client, query, asset_code=asset_code)
+    chunks = search_split(ctx.client, query, asset_code=asset_code)   # TODO H6: search_best
     ctx.retrieved += chunks                              # kept for the citation guard (L5)
     return {"chunks": [{k: c[k] for k in ("file", "section", "pages", "text")} for c in chunks]}
 
