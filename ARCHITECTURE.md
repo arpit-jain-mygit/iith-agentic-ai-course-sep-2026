@@ -195,8 +195,8 @@ Same system, laid out left-to-right by step order instead of nested boxes.
 │  │  Log Intake   │   │ Safety   │   │ re-check │   │ Procurement             │ │
 │  │  Agent        │   │ Reviewer │   │ (only    │   │ Agent                   │ │
 │  │ ★[AGENT 2]    │   │ Agent    │   │ "auto"   │   │  raises POs via         │ │
-│  │  Manual RAG   │   │ (fires   │   │ proceeds)│   │  mcp_server.py:         │ │
-│  │  Agent        │   │  only if │   │          │   │   16a check_stock       │ │
+│  │  Manual/SOP   │   │ (fires   │   │ proceeds)│   │  mcp_server.py:         │ │
+│  │  RAG Agent    │   │  only if │   │          │   │   16a check_stock       │ │
 │  │ ★[AGENT 3]    │   │  safety/ │   │          │   │   16b raise_purchase_   │ │
 │  │  Maintenance  │   │  permit) │   │          │   │        order (idem-     │ │
 │  │  Recommend-   │   │ unsafe ⇒ │   │          │   │        potent)          │ │
@@ -249,9 +249,11 @@ External services used across every step above: Gemini (via LiteLLM - all LLM
 calls + embeddings), Qdrant Cloud (vector search), LangFuse (optional tracing).
 ```
 
-★ = one of the 5 mandatory agents (PATH B / team.py, M6):
-`AGENT 1` Log Intake · `AGENT 2` Manual RAG · `AGENT 3` Maintenance
-Recommendation · `AGENT 4` Safety Reviewer · `AGENT 5` Procurement.
+★ = one of the 5 mandatory agents (PATH B / team.py, M6), named exactly as
+the spec's "Mandatory components" list:
+`AGENT 1` Log Intake Agent · `AGENT 2` Manual/SOP RAG Agent ·
+`AGENT 3` Maintenance Recommendation Agent · `AGENT 4` Safety Reviewer
+Agent · `AGENT 5` Procurement Agent.
 PATH A (graph.py, M5) wraps the same core pipeline with checkpointing
 and a human-approval interrupt instead of discrete named agents.
 
