@@ -12,6 +12,9 @@ runs/
 # M5: LangGraph checkpoint database (local run state, regenerates on next run)
 checkpoints.db
 
+# M6: POs the procurement agent has raised (mock ERP write, never the original dataset)
+procurement_log.json
+
 # Old text dumps
 *_text.txt
 
