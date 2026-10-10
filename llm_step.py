@@ -90,6 +90,25 @@ def retrieve(prompt_facts: dict) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# M3: persistent equipment memory (read side)
+#
+# IN SHORT: unlike facts.py step 9 (pre-generated work orders, fixed at
+# dataset build), this is what the SYSTEM ITSELF has written after past LIVE
+# triages (memory.py). Added to prompt_facts under "equipment_memory" so the
+# LLM can notice a fault recurring ACROSS runs, not just within one event.
+# Empty for an asset with no prior triage (including the very first run ever).
+# ---------------------------------------------------------------------------
+def add_equipment_memory(prompt_facts: dict) -> dict:
+    """prompt_facts + this asset's past triage outcomes (M3)."""
+    from memory import recall_equipment_history
+
+    event = prompt_facts["event"]
+    history = recall_equipment_history(event["asset_tag"], build_query(prompt_facts))
+    logger.info("M3: %d past triage(s) recalled for %s", len(history), event["asset_tag"])
+    return {**prompt_facts, "equipment_memory": history}
+
+
+# ---------------------------------------------------------------------------
 # L3: prompt
 #
 # IN SHORT: system prompt = HOW to work (generic rules, no plant rules);
@@ -313,6 +332,7 @@ def run(event_id: str | None = None, evaluate: bool = False) -> dict:
     """facts -> retrieve -> prompt -> LLM -> citation guard."""
     result = F.main(event_id)                                   # L1: steps 1-13
     facts, prompt_facts = result["facts"], result["prompt_facts"]
+    prompt_facts = add_equipment_memory(prompt_facts)           # M3: this asset's past triages
 
     chunks = retrieve(prompt_facts)                             # L2
     decision = call_llm(build_user_prompt(prompt_facts, chunks))  # L3 + L4

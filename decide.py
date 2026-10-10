@@ -568,9 +568,35 @@ def run(event_id: str | None = None, evaluate: bool = False,
     logger.info("P5: route=%s, reasons %s", routing["route"], routing["route_reasons"])
     final = final_output(out, triage, parts, techs, checks, routing)
 
+    if not from_file:                                            # M3: live run only, never on replay
+        remember(out, triage, checks, routing)
+
     return {"record_id": out["record_id"], "final": final, "triage": triage, "parts": parts,
             "technicians": techs, "guards": checks,
             "decision": out["decision"], "invalid_citations": out["invalid_citations"]}
+
+
+# ---------------------------------------------------------------------------
+# M3: persistent equipment memory (write side)
+#
+# IN SHORT: after every LIVE triage, write what happened for this asset to
+# equipment memory (memory.py), so a future event on the SAME asset can
+# recall it (llm_step.add_equipment_memory, read before L3). Skipped for an
+# unmatched asset: there is no equipment to remember history against.
+# ---------------------------------------------------------------------------
+def remember(out: dict, triage: dict, checks: dict, routing: dict) -> None:
+    """Write this triage's outcome to equipment memory."""
+    from memory import remember_triage
+
+    asset = out["facts"]["asset"]
+    if asset is None:
+        logger.info("M3: asset unmatched, nothing to remember")
+        return
+    remember_triage(record_id=out["record_id"], asset_tag=asset["asset_tag"],
+                    received_at=out["facts"]["received_at"], priority=triage["priority"],
+                    probable_fault=triage["probable_fault"], safety_critical=triage["safety_critical"],
+                    requires_permit=triage["requires_permit"], confidence=checks["final_confidence"],
+                    route=routing["route"])
 
 
 if __name__ == "__main__":
