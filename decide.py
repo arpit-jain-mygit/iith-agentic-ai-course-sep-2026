@@ -401,9 +401,10 @@ def guards(out: dict, triage: dict, parts: dict, techs: dict) -> dict:
 #   input : out (decision, facts), triage (P1), parts (P2), techs (P3), checks (P4)
 #   output: {"route", "route_reasons"} and the final record (final_output)
 #
-# CURRENT SETTING: AUTO_ROUTING_ENABLED = False -> EVERY event goes to
-# human_review. The rules below are still evaluated and listed, so the
-# reviewer sees why an event matters, and enabling auto later is one switch.
+# M5: AUTO_ROUTING_ENABLED = True -> minor issues auto-log, only a flagged
+# event (any rule below) pauses the M5 graph for human-approval (interrupt).
+# The rules are still evaluated and listed even when a run goes "auto", so a
+# reviewer who later opens it still sees why (or why not) it mattered.
 #
 # Rules (design choices), all evaluated, every one that applies is listed:
 #   1. P4 raised a critical flag                         -> human_review
@@ -423,7 +424,7 @@ def guards(out: dict, triage: dict, parts: dict, techs: dict) -> dict:
 # the decision: route + reasons, confidence, flags, parts, technicians,
 # actions, reasoning, citations, and where each field came from.
 # ---------------------------------------------------------------------------
-AUTO_ROUTING_ENABLED = False          # False: everything goes to human_review (current choice)
+AUTO_ROUTING_ENABLED = True           # M5: real conditional routing (was False pre-M5)
 HIGH_RISK_PRIORITIES = ("P1",)        # priorities treated as high-risk by rule 2
 
 

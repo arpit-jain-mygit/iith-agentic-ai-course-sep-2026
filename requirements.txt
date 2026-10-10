@@ -7,3 +7,5 @@ litellm           # rag_common.py / llm_step.py: Gemini embeddings and LLM calls
 qdrant-client     # rag_common.py: vector database
 rank-bm25         # rag_common.py: BM25 keyword index for hybrid search (M4)
 tenacity          # needed by litellm's num_retries (retry on 429 / 503); not installed with litellm
+langgraph                     # graph.py: M5 orchestrated workflow, state graph + conditional routing
+langgraph-checkpoint-sqlite   # graph.py: durable checkpointing (resume a paused/interrupted run)

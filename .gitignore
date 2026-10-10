@@ -9,6 +9,9 @@ __pycache__/
 # Saved llm_step runs (regenerate with decide.py --save)
 runs/
 
+# M5: LangGraph checkpoint database (local run state, regenerates on next run)
+checkpoints.db
+
 # Old text dumps
 *_text.txt
 
