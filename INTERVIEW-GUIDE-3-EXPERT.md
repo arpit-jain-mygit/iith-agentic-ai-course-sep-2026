@@ -48,6 +48,7 @@ Topics [E32](#e32-case-study-an-ai-coding-assistant-cursor--copilot-style)–[E3
 | [E33](#e33-case-study-an-adaptive-learning-platform-duolingo-style) | Case study: an adaptive learning platform (Duolingo style) | Book · System Design for the LLM Era |
 | [E34](#e34-case-study-ai-powered-search-for-e-commerce) | Case study: AI-powered search for e-commerce | Book · System Design for the LLM Era |
 | [E35](#e35-case-study-a-customer-support-agent-with-graphrag) | Case study: a customer-support agent with GraphRAG | Book · System Design for the LLM Era |
+| [E36](#e36-adopting-claude-across-the-sdlc-a-playbook-for-microservice-teams) | Adopting Claude across the SDLC: a playbook for microservice teams | Extra · leadership scenario |
 
 ---
 
@@ -852,7 +853,7 @@ The closing principle: *don't design the enterprise around a model. Design a con
 around business intent, trusted data, context, routing, evaluation, guardrails, observability and human
 accountability.* Models will change; those responsibilities won't.
 
-More: [AI-SDLC in practice](#ai-sdlc-in-practice), with a simple use case walked through every stage, the six-step intelligence flow mapped onto PlantGuard, the evaluation metrics, and what changes for architects.
+Not to be confused with using AI to build ordinary software: see [E36](#e36-adopting-claude-across-the-sdlc-a-playbook-for-microservice-teams). More: [AI-SDLC in practice](#ai-sdlc-in-practice), with a simple use case walked through every stage, the six-step intelligence flow mapped onto PlantGuard, the evaluation metrics, and what changes for architects.
 
 Finally, **prompt tuning itself can be automated**. Tools such as Opik's optimiser start from a base prompt
 and an eval dataset, let an LLM propose improved prompts, score each one against the metric, and keep
@@ -1471,6 +1472,268 @@ impact and the mitigation:
 | Retrieval | misses the right document | hybrid search, graph traversal, golden-set regression |
 | Ingestion | stale knowledge | freshness alerts on queue lag |
 | Router | wrong intent | escalation-rate alerts, intent-model evals |
+
+## E36. Adopting Claude across the SDLC: a playbook for microservice teams
+
+*Typical question: "You have four engineering teams building microservices. How would you start
+adopting Claude across the software development lifecycle, and what will it take?"*
+
+This is about using AI to build **ordinary software** faster and better. It's different from
+[E23](#e23-llmops-from-raw-data-to-serving-to-feedback), which is about building AI products.
+
+**The golden rule: AI drafts and does the legwork; humans decide, approve and own the result.**
+
+**Part 1: Getting started, step by step**
+
+| Step | What happens | AI's part | Human's part |
+|---|---|---|---|
+| **1. Set goals and rules** | agree why (faster delivery? fewer defects?) and what's allowed (no secrets, no customer data) | none | leaders, security and legal decide |
+| **2. Set up access safely** | licences or cloud access, SSO, central settings: which files Claude can't read, which commands need approval | none | platform team configures |
+| **3. Measure today** | record lead time, PR cycle time, change failure rate, defect rate | none | engineering managers capture the baseline |
+| **4. Make repos AI-ready** | add a `CLAUDE.md` to each repo (build and test commands, conventions, "never do" rules); fix slow or flaky tests | **drafts** `CLAUDE.md` and READMEs from the code | engineers **review and correct** them; fix the tests |
+| **5. Pilot with one team** | 4–6 weeks on low-risk work: tests, docs, small bug fixes, refactors | **writes** the code, tests and docs | engineers **guide, review and merge** |
+| **6. Capture what works** | turn good patterns into shared skills, commands and automatic checks (hooks) | **drafts** the skills and hooks | champions **decide** what becomes standard |
+| **7. Roll out to all four teams** | shared setup, plus an AI first-pass review on every PR in CI | **reviews** each PR first and flags issues | reviewers **approve**; humans own every merge |
+| **8. Measure and adjust** | compare with the step 3 baseline; fix what got worse | **summarises** metrics and feedback | leaders **decide** next steps |
+
+Start where mistakes are cheap and easy to check, and add autonomy only once the numbers show it's
+working.
+
+**Part 1 in more detail**
+
+**Step 1: Set goals and rules** *(human)*
+
+- Pick **two or three goals** that matter to the business, e.g. "cut lead time by 20%" or "raise test
+  coverage on legacy services to 70%". Not "use AI more". Set them as **milestones** (see
+  [milestone-based goals](#milestone-based-goals) below).
+- Write a **one-page usage policy**:
+  - what may be shared (source code, yes);
+  - what may not (secrets, customer data, production credentials);
+  - who owns AI-written code (the engineer who merges it);
+  - when *not* to use AI (e.g. cryptography code without expert review).
+- Get **security and legal sign-off** on the vendor's data terms: is the code used for training, and
+  how long is it retained?
+- *Done when:* goals and policy are agreed and shared with all four teams.
+
+**Step 2: Set up access safely** *(human)*
+
+- Choose access: a business plan with SSO and admin controls, or the model through your own cloud
+  account (Bedrock, Vertex) if code must stay inside it.
+- Configure **central settings** once, for everyone:
+  - files Claude may never read (`.env`, key files);
+  - commands that always need approval (deploy, delete, database changes);
+  - no access to production systems.
+- Turn on **usage reporting**, so you can see adoption and cost per team.
+- *Done when:* every engineer can sign in, and the safety settings apply to all.
+
+**Step 3: Measure today** *(human)*
+
+- Record **4–6 numbers** for the last 2–3 months:
+  - lead time (ticket to production);
+  - PR cycle time (open to merge);
+  - deployment frequency;
+  - change failure rate;
+  - escaped defects;
+  - test coverage.
+- Run a **short developer survey**: what's slow or painful today?
+- *Done when:* you have a baseline to compare with in step 8. Without it, "AI helped" is just opinion.
+
+**Step 4: Make repos AI-ready** *(AI drafts, humans fix)*
+
+- **AI:** reads each repo and drafts a `CLAUDE.md`: how to build, test and run; the folder structure;
+  coding conventions; "never do" rules (e.g. "never change the public API without a contract test").
+- **Humans:** correct the draft. It's only as good as what's in the code, and team knowledge often
+  isn't.
+- **Humans:** fix **slow or flaky tests** first. AI works by changing code and running the tests, so
+  bad tests make it useless or dangerous.
+- Put **API contracts** (OpenAPI, Kafka event schemas) in each repo, so AI can see what other services
+  depend on.
+- *Done when:* a new engineer, or Claude, can build and test the service using only `CLAUDE.md`.
+
+**Step 5: Pilot with one team** *(AI does, humans review)*
+
+- Pick the team with the best tests and the most willing engineers, for **4–6 weeks**.
+- Start with **low-risk, easy-to-check work**:
+  - writing missing tests;
+  - updating docs;
+  - small bug fixes;
+  - refactors covered by tests;
+  - dependency upgrades.
+- **AI:** writes the code, tests and docs in small steps. **Engineers:** give clear tasks, review every
+  change, and merge only what they understand.
+- Keep a simple **log**: task, time saved, what went wrong.
+- *Done when:* you have measured results and a short playbook ("what works, what to avoid").
+
+**Step 6: Capture what works** *(AI drafts, champions decide)*
+
+- Turn repeated good prompts into **shared skills or commands**, e.g. "add an endpoint our way", "write
+  contract tests for this API", "upgrade Spring Boot safely".
+- Add **automatic checks (hooks)**: run the formatter and linter after every AI edit, run the related
+  tests, block edits to protected files.
+- Connect the tools engineers use through **MCP**: issue tracker, wiki, read-only logs and metrics.
+- **AI:** drafts the skills and hooks. **Champions:** test them and decide what becomes the team
+  standard.
+- *Done when:* the shared kit is in a common repo that all four teams can use.
+
+**Step 7: Roll out to all four teams** *(AI reviews first, humans approve)*
+
+- Give each team **one or two champions**, trained with the pilot playbook.
+- Add an **AI first-pass review** to every PR in CI. It comments on bugs, security issues and standards
+  before a human looks.
+- Keep the **same rules for AI-written code** as for human code: CI gates, code owners, security scans,
+  small PRs.
+- **Label AI-assisted PRs**, so their quality can be compared.
+- *Done when:* all four teams use the shared setup, and the merge rules are unchanged.
+
+**Step 8: Measure and adjust** *(AI summarises, leaders decide)*
+
+- Every month, compare with the **step 3 baseline**: did lead time and cycle time improve **without**
+  more failed deployments or escaped defects?
+- **AI:** summarises the metrics, survey answers and incident notes. **Leaders:** decide what to expand,
+  fix or stop.
+- Then grow carefully, e.g. "AI drafts a PR from a well-written ticket", scheduled dependency upgrades,
+  incident-triage help. Always keep **human approval before production**.
+- *Done when:* it never is. This becomes a regular review, like any engineering practice.
+
+**Part 2: A feature's journey, with AI and human steps**
+
+Example: *"Add a discount code to orders"*, which touches the Order, Pricing and Notification
+services.
+
+| Step | AI does | Human does |
+|---|---|---|
+| **1. Requirement** | turns the request into user stories, acceptance criteria and edge cases (expired code? two codes?) | product owner **decides scope** and approves |
+| **2. Design** | proposes the API change, lists which services and consumers are affected, drafts the design note | tech lead or architect **decides** and approves the contract |
+| **3. Code** | implements the change in small steps in each service, running the tests as it goes | engineer **guides** the work and **reviews** each step |
+| **4. Tests** | writes unit tests and contract tests between Order and Pricing | engineer **checks** the tests cover what matters |
+| **5. Pull request** | first-pass review: bugs, security issues, standards | reviewer **approves**; **only humans merge** |
+| **6. Deploy** | fixes pipeline or config issues, drafts release notes | automated CI gates pass; humans **approve the release** |
+| **7. Run** | when an alert fires, summarises logs and traces and suggests a likely cause | on-call engineer **decides and acts** |
+| **8. Learn** | drafts the post-mortem and suggests follow-ups | team **agrees** the actions |
+
+The pattern repeats at every step: **AI produces the first version fast; a named person checks it and
+is accountable.**
+
+**Part 2 in more detail** (the discount-code feature)
+
+**1. Requirement**
+
+- **AI:** turns "customers should be able to apply a discount code" into stories with acceptance
+  criteria, and lists edge cases: expired code, code used twice, code on an already-discounted item,
+  currency rounding.
+- **Human (product owner):** decides what's in scope for this release (e.g. one code per order) and
+  approves the stories.
+
+**2. Design**
+
+- **AI:** proposes the change, e.g. add `discountCode` to the Order API and a new
+  `POST /pricing/discounts/validate` in Pricing. Lists every service that calls these APIs and drafts a
+  short design note.
+- **Human (tech lead or architect):** checks the design fits the architecture, picks between options
+  (e.g. validate synchronously, or via an event), and approves the API contract.
+
+**3. Code**
+
+- **AI:** implements the change **service by service, in small steps**, running the tests after each
+  step, and following `CLAUDE.md` conventions.
+- **Human (engineer):** gives one clear task at a time, reviews each step, and stops the AI if it goes
+  the wrong way. The engineer must understand every line they will merge.
+
+**4. Tests**
+
+- **AI:** writes unit tests (valid, expired, already-used codes) and **contract tests** between Order
+  and Pricing, so a future change in one can't silently break the other.
+- **Human:** checks the tests test the **right behaviour**, not just whatever the code currently does,
+  and adds any case the business cares about.
+
+**5. Pull request**
+
+- **AI:** reviews the PR first: possible bugs, missing null checks, security issues (e.g. could a user
+  guess codes?), standard violations, and a plain-English summary of the change.
+- **Human (reviewer):** reads the change and the AI comments, asks questions, and **approves or rejects**.
+  Only a human can merge.
+
+**6. Deploy**
+
+- **AI:** fixes pipeline or configuration problems (Docker, Helm, environment variables) and drafts the
+  release notes.
+- **Human:** checks that the automated gates (tests, security scans) passed, and approves the release.
+  Risky changes go out behind a feature flag or canary.
+
+**7. Run**
+
+- **AI:** when an alert fires ("discount validation errors up 10×"), reads logs and traces (read-only),
+  summarises what changed, and suggests likely causes.
+- **Human (on-call engineer):** decides what to do (roll back, fix forward, disable the feature flag)
+  and does it. The AI never acts on production by itself.
+
+**8. Learn**
+
+- **AI:** drafts the post-mortem: a timeline from logs and chat, what went wrong, suggested follow-ups.
+- **Human (team):** agrees the real root cause and the actions, and updates `CLAUDE.md` or the shared
+  skills if the AI repeated a mistake that a rule could prevent.
+
+#### Milestone-based goals
+
+Set goals as **milestones**: each has a target, a **quality guardrail** that must not get worse, and a
+**decision gate** (move on, adjust, or stop). The numbers below are **examples only**; set yours from
+the step 3 baseline.
+
+*What "lead time" means:* the time for a change to go from **work started** (or code committed) to
+**running in production**, one of the four DORA metrics. If a typical change takes 10 working days
+today, "cut by 20%" means about 8 days, measured the same way, on a similar mix of work.
+
+*The catch:* AI mostly speeds up **coding and testing**, which may not be where the time goes:
+
+```text
+coding 3 days | waiting for review 4 days | CI/CD and release 3 days   = 10 days
+```
+
+Halving coding time (3 → 1.5 days) only cuts lead time to 8.5 days (15%), unless you also shrink review
+waits (small PRs, AI first-pass review) and speed up releases. So targets must follow **where the time
+actually goes**.
+
+*Milestones for Part 1 (adoption):*
+
+| Milestone | When (indicative) | Goal (example) | Guardrail | Decision gate |
+|---|---|---|---|---|
+| **M0. Ready** | end of week 3 | policy signed off; access and safety settings live; baseline recorded | no secrets or customer data in prompts (spot-checks) | start the pilot only when all three are done |
+| **M1. Pilot proves value** | end of week 9 | pilot team: PR cycle time −15%; test coverage on 2 legacy services +20 points; 70% of the team using it weekly | change failure rate and escaped defects **not higher** than baseline | go to rollout, extend the pilot, or stop |
+| **M2. Shared kit** | end of week 12 | `CLAUDE.md` in every repo; 5+ shared skills or commands; hooks and AI PR review running in CI | review time per PR not higher; PR size not bigger | roll out only when the kit works for the pilot team |
+| **M3. All four teams** | end of week 20 | all teams on the shared setup; lead time −10–20% overall | same guardrails, per team | expand to more autonomous workflows, or fix weak teams first |
+| **M4. Sustained** | quarterly | improvements hold for two quarters; developer survey positive | no rise in incidents linked to AI-assisted changes | keep investing, adjust, or scale back |
+
+*Milestones for Part 2 (AI's role in the feature journey):* grow AI's part **one stage at a time**, moving
+on only when the stage before is proven:
+
+| Milestone | AI's role (examples) | Goal (example) | Guardrail | Move on when |
+|---|---|---|---|---|
+| **S1. Tests and docs** | writes missing tests, READMEs, release notes | coverage +20 points on target services; docs updated with every PR | new tests are meaningful (reviewer spot-checks); no flaky tests added | reviewers trust AI tests with light edits |
+| **S2. Small code changes** | bug fixes, refactors, dependency upgrades, done in small steps | 30% of small tickets done with AI help; cycle time for them −25% | change failure rate not higher; PRs stay small | quality holds for 4+ weeks |
+| **S3. First-pass PR review** | reviews every PR before humans | human review time −20%; AI catches real issues (track accepted comments) | no rise in escaped defects; reviewers still read the code | AI comments are useful more often than noise |
+| **S4. Requirements and design** | drafts stories, edge cases, API changes, impact lists | fewer edge-case bugs found late; design notes for every cross-service change | humans still decide scope and approve contracts | product owners and architects find the drafts useful |
+| **S5. Operations** | summarises alerts, logs and traces (read-only); drafts post-mortems | time to find root cause −20%; post-mortems written within 2 days | AI never acts on production; on-call decides | on-call engineers rely on the summaries |
+| **S6. Ticket → draft PR** | turns a well-written ticket into a tested draft PR | 20% of eligible tickets start from an AI draft PR | same merge rules; humans review every line | only after S1–S3 are solid |
+
+The principle behind both tables: **expand AI's role only when the numbers show it's helping, and never
+trade quality for speed.**
+
+**What to watch**
+
+- **Measure:** lead time, PR cycle time, change failure rate, escaped defects, developer feedback. Never
+  "lines of code generated".
+- **Warning signs:** bigger PRs, a growing review backlog, more failed deployments. Slow down if you see
+  them.
+- **Main risks:**
+  - plausible but wrong code → tests, CI gates and human review;
+  - secrets or data leaking → blocked files and secret scanning;
+  - four teams using AI four different ways → shared `CLAUDE.md` sections and skills;
+  - juniors not learning → make them explain AI-written changes in their PRs.
+
+**One line for interviews:** *"Set the rules and measure a baseline first, make the repos AI-ready,
+pilot with one team on low-risk work, then scale with shared skills and AI first-pass reviews. At every
+step AI drafts and humans decide, approve and own the merge, and success is judged by delivery and
+quality metrics, not by how much code AI wrote."*
 
 ---
 

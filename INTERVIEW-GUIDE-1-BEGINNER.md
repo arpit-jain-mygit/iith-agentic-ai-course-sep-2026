@@ -475,7 +475,7 @@ Both are open protocols, but they connect different things.
   built by another team or company. Instead of calling a function, you hand over a task.
 
 A memorable image: MCP is vertical (agent reaching down to its tools); A2A is horizontal (agent talking
-sideways to a peer). They complement each other rather than compete. Details are in [I22](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i22-how-mcp-works-when-to-use-a2a).
+sideways to a peer). They complement each other rather than compete. Details are in [I22](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i22-how-mcp-works-when-to-use-a2a). A2A explained step by step, with a PlantGuard example: [A2A in more detail](#a2a-in-more-detail).
 
 ## B21. Attention and positional encoding
 
@@ -1604,6 +1604,123 @@ method.
 the matching method; hybrid runs both and fuses them; reranking picks the final few; and the search is
 triggered either by code (RAG) or by the LLM through a tool (agentic RAG). Semantic is the goal, not a
 step. Usually code runs both searches every time, so nobody has to choose."*
+
+### A2A in more detail
+
+*Linked from [B20](#b20-mcp-and-a2a-in-one-picture).* **A2A (Agent2Agent)** is an open protocol, started
+by Google in 2025 and now run as an open-source project under the Linux Foundation. It lets **independent
+AI agents work together**, even when different teams or companies built them on different frameworks.
+
+**The core idea: delegate to a colleague, don't call a function**
+
+- With **MCP**, your agent calls a **tool**: a function that does one thing and returns a result. Your
+  agent does all the thinking.
+- With **A2A**, your agent hands a **task** to **another agent**. That agent does its own thinking, uses
+  its own tools and data, and may take minutes or days. Your agent **can't see inside it**. It only sees
+  the task's status, any questions, and the results.
+
+*Analogy:* MCP is like using a calculator: you press the buttons. A2A is like emailing a supplier's sales
+team: you describe what you need, they work it out their own way, may ask you questions, and send back a
+quote.
+
+**The five building blocks**
+
+1. **Agent Card**: a small JSON "business card" each agent publishes at a well-known URL, saying who it
+   is, what it can do (its **skills**), where to reach it, and **how to authenticate**. Client agents
+   read it to **discover** the right agent for a job.
+2. **Task**: the unit of work, with an ID and a **lifecycle**: `submitted → working → input-required →
+   completed` (or `failed` / `canceled`). Long jobs are normal.
+3. **Messages**: the back-and-forth between the two agents (the request, follow-up questions, answers).
+   Each message is made of **parts**: text, files, or structured data (JSON).
+4. **Artifacts**: the **results** the remote agent produces, such as a document, a JSON quote, or an image.
+5. **Updates**: for long tasks, the client gets progress by **streaming** (Server-Sent Events) or by
+   **push notifications** (a webhook call when the status changes), instead of waiting on an open call.
+
+Underneath it's ordinary web technology: HTTPS with JSON-RPC messages, and standard authentication
+(OAuth 2.0, API keys and so on), declared in the Agent Card.
+
+**A PlantGuard example: ordering a part from a supplier's agent**
+
+PlantGuard's procurement agent (M6) needs 4 × `VPW-P-00043`, which is out of stock. The supplier runs its
+own quoting agent.
+
+```text
+PlantGuard procurement agent                          Supplier's quoting agent
+(our system)                                          (their system, their LLM, their data)
+
+1. Discover:  GET supplier's Agent Card  ───────────▶  {"name": "Acme Quoting Agent",
+                                                         "skills": ["quote_parts", "check_lead_time"],
+                                                         "auth": "OAuth2", ...}
+2. Send task: "Quote 4 x VPW-P-00043,
+               delivery to Plant 2 by Friday" ──────▶  status: working
+                                                        (checks its own stock and pricing via ITS tools)
+3.                                      ◀───────────  status: input-required
+                                                        "Standard or express shipping?"
+4. Reply:     "Express"                 ─────────────▶  status: working
+5.                                      ◀───────────  status: completed
+                                                        artifact: {"part": "VPW-P-00043", "qty": 4,
+                                                                   "unit_price": 1250, "delivery": "Thu"}
+6. PlantGuard checks the quote against its own rules and routes it to a human for purchase approval.
+```
+
+At the same time, PlantGuard uses **MCP** for its *own* systems: reading stock from the inventory
+server, creating the purchase request in the ERP mock. **MCP connects an agent to its tools; A2A
+connects it to other agents.** Most real systems use both.
+
+*(Names, prices and fields above are illustrative and simplified, not the exact protocol format.)*
+
+**What a simplified Agent Card looks like**
+
+```json
+{
+  "name": "Acme Quoting Agent",
+  "description": "Quotes prices and lead times for Acme spare parts",
+  "url": "https://agents.acme.example/a2a",
+  "skills": [
+    {"id": "quote_parts", "description": "Price and delivery date for a list of part numbers"},
+    {"id": "check_lead_time", "description": "Current lead time for a part"}
+  ],
+  "capabilities": {"streaming": true, "pushNotifications": true},
+  "securitySchemes": {"oauth": {"type": "oauth2"}}
+}
+```
+
+**MCP vs A2A, side by side**
+
+| | MCP | A2A |
+|---|---|---|
+| Connects | agent → **tools and data** | agent → **another agent** |
+| The other side | a function: no reasoning of its own | an agent: its own LLM, tools, memory |
+| Who does the thinking | your agent | the remote agent decides *how* to do the task |
+| Typical duration | milliseconds to seconds | seconds to days (long-running tasks) |
+| Interaction | call → result | task → status updates → questions → artifacts |
+| Visibility | you see the tool's inputs and outputs | the remote agent is **opaque**: you see only the task, messages and artifacts |
+| Typical use | your own databases, APIs, files | another team's or company's agent |
+
+**When to use A2A, and when not to**
+
+- **Use it** when the other side is genuinely an **independent agent**: owned by another team or
+  company, with its own data and logic you shouldn't (or can't) see, and work that may take a while or
+  need clarifying questions. Examples: supplier quoting, a partner's claims system, another department's
+  HR or finance agent.
+- **Don't use it** for a plain function or API you control. Wrap that as an MCP tool. Also don't use it
+  between agents inside one application; a shared graph state (LangGraph) is simpler there ([I42](INTERVIEW-GUIDE-2-INTERMEDIATE.md#i42-multi-agent-orchestration-patterns)).
+
+**Risks to mention in an interview**
+
+- **Trust and authentication:** only talk to agents you've verified; use proper auth from the Agent
+  Card; limit what each partner agent may ask for.
+- **Data sharing:** decide what you send outside your company (no unnecessary personal or confidential
+  data).
+- **Untrusted results:** a remote agent's messages and artifacts are **input from outside**. Validate
+  them, and watch for prompt injection hidden in them ([E7](INTERVIEW-GUIDE-3-EXPERT.md#e7-prompt-injection)).
+- **Accountability:** log every task, message and artifact; keep humans approving consequential
+  outcomes, such as the purchase in the example.
+
+**One line for interviews:** *"MCP lets an agent use tools; A2A lets an agent delegate a task to another
+independent agent. You discover it through its Agent Card, send a task, follow its status (including
+questions back to you), and receive artifacts, without ever seeing inside it. Real systems use MCP for
+their own tools and A2A to collaborate with other teams' or companies' agents."*
 
 ---
 
