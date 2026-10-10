@@ -201,7 +201,16 @@ def run_team(record_id: str) -> dict:
     routing = D.route(rec["out"], rec["triage"], checks)
     final = D.final_output(rec["out"], rec["triage"], rec["parts"], rec["technicians"], checks, routing)
 
-    procurement = procurement_agent(record_id, intake["facts"]["received_at"], rec["parts"])
+    # M8 guardrail: never auto-execute a side effect (raising a PO) on an event
+    # flagged for human review - that is exactly the unsigned-off auto-action
+    # the spec hard-blocks. Only "auto" (nothing flagged it) reaches procurement.
+    if routing["route"] == "auto":
+        procurement = procurement_agent(record_id, intake["facts"]["received_at"], rec["parts"])
+    else:
+        procurement = {"purchase_orders_raised": [],
+                       "withheld_reason": "route is human_review: procurement withheld pending sign-off"}
+        logger.info("M8: procurement withheld for %s (route=human_review)", record_id)
+
     D.remember(rec["out"], rec["triage"], checks, routing)         # M3 write
 
     return {"record_id": record_id, "final": final, "safety_review": review,
