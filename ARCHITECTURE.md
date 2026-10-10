@@ -187,21 +187,24 @@ Same system, laid out left-to-right by step order instead of nested boxes.
 └──────────────────────────────────────────────────┬┴────────────────────────┘
                                                       │
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  PATH B: team.py (M6) - 5 named agents                                       │
+│  PATH B: team.py (M6) - 5 MANDATORY AGENTS (★ marks each one)                │
 │                                                                               │
-│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────────────────┐     │
-│  │ STEP 13b │──▶│ STEP 14  │──▶│ STEP 15  │──▶│       STEP 16          │     │
-│  │ 1 Log    │   │ 4 Safety │   │ route    │   │ 5 Procurement           │     │
-│  │  Intake  │   │  Reviewer│   │ re-check │   │  raises POs via         │     │
-│  │ 2 Manual │   │ (fires   │   │ (only    │   │  mcp_server.py:         │     │
-│  │  RAG     │   │  only if │   │ "auto"   │   │   16a check_stock       │     │
-│  │ 3 Maint. │   │  safety/ │   │ proceeds)│   │   16b raise_purchase_   │     │
-│  │  Recomm- │   │  permit) │   │          │   │        order (idem-     │     │
-│  │  endation│   │ unsafe ⇒ │   │          │   │        potent)          │     │
-│  │ (re-runs │   │ critical │   │          │   │  GATED: route must be   │     │
-│  │  1-12)   │   │  flag    │   │          │   │  "auto" (M8 guardrail)  │     │
-│  └──────────┘   └──────────┘   └──────────┘   └───────────┬─────────────┘     │
-└───────────────────────────────────────────────────────────┬───────────────────┘
+│  ┌──────────────┐   ┌──────────┐   ┌──────────┐   ┌──────────────────────┐ │
+│  │   STEP 13b    │──▶│ STEP 14  │──▶│ STEP 15  │──▶│       STEP 16          │ │
+│  │ ★[AGENT 1]    │   │★[AGENT 4]│   │ route    │   │★[AGENT 5]               │ │
+│  │  Log Intake   │   │ Safety   │   │ re-check │   │ Procurement             │ │
+│  │  Agent        │   │ Reviewer │   │ (only    │   │ Agent                   │ │
+│  │ ★[AGENT 2]    │   │ Agent    │   │ "auto"   │   │  raises POs via         │ │
+│  │  Manual RAG   │   │ (fires   │   │ proceeds)│   │  mcp_server.py:         │ │
+│  │  Agent        │   │  only if │   │          │   │   16a check_stock       │ │
+│  │ ★[AGENT 3]    │   │  safety/ │   │          │   │   16b raise_purchase_   │ │
+│  │  Maintenance  │   │  permit) │   │          │   │        order (idem-     │ │
+│  │  Recommend-   │   │ unsafe ⇒ │   │          │   │        potent)          │ │
+│  │  ation Agent  │   │ critical │   │          │   │  GATED: route must be   │ │
+│  │ (re-runs      │   │  flag    │   │          │   │  "auto" (M8 guardrail)  │ │
+│  │  1-12)        │   │          │   │          │   │                         │ │
+│  └──────────────┘   └──────────┘   └──────────┘   └───────────┬─────────────┘ │
+└───────────────────────────────────────────────────────────────┬───────────────┘
                                                               │
                      ┌────────────────────────────────────────┘
                      ▼
@@ -245,6 +248,12 @@ Same system, laid out left-to-right by step order instead of nested boxes.
 External services used across every step above: Gemini (via LiteLLM - all LLM
 calls + embeddings), Qdrant Cloud (vector search), LangFuse (optional tracing).
 ```
+
+★ = one of the 5 mandatory agents (PATH B / team.py, M6):
+`AGENT 1` Log Intake · `AGENT 2` Manual RAG · `AGENT 3` Maintenance
+Recommendation · `AGENT 4` Safety Reviewer · `AGENT 5` Procurement.
+PATH A (graph.py, M5) wraps the same core pipeline with checkpointing
+and a human-approval interrupt instead of discrete named agents.
 
 ## Milestone -> file map
 
