@@ -19,7 +19,7 @@ from collections import Counter
 from pathlib import Path
 
 from rag_common import (COLLECTION, K_ASSET, K_PLANT, PDF_DIR, PLANT_WIDE, embed,
-                        get_client, search_split)
+                        get_client, search_best, search_split)
 from settings import EVAL_PATH, MOCK_API
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -637,9 +637,78 @@ def verify() -> float:
 
 
 # ---------------------------------------------------------------------------
-# Run: each step feeds the next (R1 -> R7)
+# H4 (M4): retrieval baseline - compare the search modes on the golden set
+#
+# IN SHORT: run every graded question through each mode of
+# rag_common.search_best (dense / hybrid / rerank) and report, per mode:
+#   recall@k    : required titles found / required titles   (as R7)
+#   precision@k : returned chunks whose doc_title is required / chunks returned
+#   MRR         : mean of 1 / rank of the FIRST chunk with a required title
+#                 (0 if none): did the right document come out on top?
+#   output      : one row per mode + per-question misses (logged), and the
+#                 numbers as a dict
+#
+# Why H4 exists: "hybrid + rerank is better" is a claim; this measures it
+# on the same questions, one change at a time, before the triage path is
+# switched over (SEARCH_MODE). Run without re-ingesting:
+#   .venv/bin/python rag_ingest.py --compare
+# Cost: dense + hybrid use only cached embeddings; rerank makes one LLM
+# call per question (cached after the first run).
+# ---------------------------------------------------------------------------
+MODES = ("dense", "hybrid", "rerank")
+
+
+def score_case(hits: list[dict], required: set[str]) -> dict:
+    """recall, precision and reciprocal rank for one question's hits."""
+    titles = [h["doc_title"] for h in hits]                  # in rank order, best first
+    found = required & set(titles)
+    first = next((rank for rank, t in enumerate(titles, start=1) if t in required), None)
+    return {"recall": len(found) / len(required),
+            "precision": sum(t in required for t in titles) / len(titles) if titles else 0.0,
+            "rr": 1 / first if first else 0.0,
+            "missing": sorted(required - found)}
+
+
+def compare(modes: tuple[str, ...] = MODES) -> dict:
+    """Metrics per mode over the graded golden questions; logs a table."""
+    client = get_client()
+    known = known_asset_codes()
+    cases = [c for c in load_golden_set() if c["must_cite"]]
+    logger.info("H4: comparing %s on %d graded questions (%d asset + %d plant-wide chunks)",
+                "/".join(modes), len(cases), K_ASSET, K_PLANT)
+
+    results = {}
+    for mode in modes:
+        rows = []
+        for case in cases:
+            code = asset_code_in(case["question"], known)
+            hits = search_best(client, case["question"], code, mode=mode)
+            rows.append({"id": case["id"], **score_case(hits, set(case["must_cite"]))})
+        # recall pooled over all required titles (as R7); precision and MRR averaged per question
+        required = sum(len(c["must_cite"]) for c in cases)
+        found = sum(r["recall"] * len(c["must_cite"]) for r, c in zip(rows, cases))
+        results[mode] = {"recall": found / required,
+                         "precision": sum(r["precision"] for r in rows) / len(rows),
+                         "mrr": sum(r["rr"] for r in rows) / len(rows),
+                         "misses": {r["id"]: r["missing"] for r in rows if r["missing"]}}
+
+    logger.info("H4: %-8s %8s %10s %6s", "mode", "recall", "precision", "MRR")
+    for mode, m in results.items():
+        logger.info("H4: %-8s %7.0f%% %9.0f%% %6.2f", mode,
+                    100 * m["recall"], 100 * m["precision"], m["mrr"])
+    for mode, m in results.items():
+        for qid, missing in m["misses"].items():
+            logger.info("H4: MISS %-7s %s missing=%s", mode, qid, missing)
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Run: each step feeds the next (R1 -> R7); --compare runs H4 only
 # ---------------------------------------------------------------------------
 def main() -> None:
+    if "--compare" in sys.argv:                # H4 only: no re-ingest
+        compare()
+        return
     pdfs = find_pdfs()                         # R1
     docs = extract_all(pdfs)                   # R2
     logger.info("R3: chunking by section")

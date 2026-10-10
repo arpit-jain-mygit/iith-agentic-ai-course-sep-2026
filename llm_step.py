@@ -4,7 +4,7 @@
 
 Flow (one event):
   L1 facts      : facts.main()            steps 1-13, deterministic
-  L2 retrieve   : rag_common.search_split  manual + plant-wide chunks
+  L2 retrieve   : rag_common.search_best   manual + plant-wide chunks (mode = SEARCH_MODE)
   L3 prompt     : generic rules + FACTS + DOCUMENTS
   L4 call       : the ONLY LLM call; validated against a schema, retried once
   L5 guard      : citations must point to retrieved chunks
@@ -18,7 +18,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, ValidationError
 
 import facts as F
-from rag_common import get_client, search_split
+from rag_common import get_client, search_best
 from settings import llm_model            # LLM_MODEL comes from .env
 
 MAX_ATTEMPTS = 2                          # one retry if the JSON fails validation
@@ -70,7 +70,7 @@ class LLMDecision(BaseModel):
 #                (the description adds the machine type for prose like
 #                 "making a funny noise")
 #   asset_code : from the registry (step 2), else the event's own code
-#   result     : search_split -> up to 3 manual + 3 plant-wide chunks
+#   result     : search_best (H6: SEARCH_MODE="rerank") -> up to 3 manual + 3 plant-wide chunks
 # ---------------------------------------------------------------------------
 def build_query(prompt_facts: dict) -> str:
     """Text to search with."""
@@ -83,7 +83,7 @@ def retrieve(prompt_facts: dict) -> list[dict]:
     """Chunks for this event: the asset's manual + plant-wide procedures."""
     asset = prompt_facts["asset"]
     code = asset["asset_code"] if asset else prompt_facts["event"]["asset_code"]
-    chunks = search_split(get_client(), build_query(prompt_facts), asset_code=code)   # TODO H6: search_best
+    chunks = search_best(get_client(), build_query(prompt_facts), asset_code=code)
     logger.info("L2: %d chunks: %s", len(chunks),
                 "; ".join(f"{c['file']} | {c['section'][:35]}" for c in chunks))
     return chunks
@@ -354,7 +354,7 @@ def run(event_id: str | None = None, evaluate: bool = False) -> dict:
 #   calculate_downtime_cost  facts.get_downtime (step 10) x hours   (the calculator)
 #   check_spare_parts        facts.get_inventory_check     (step 11)
 #   find_technicians         facts.get_technician_pool     (step 12), optional certification filter
-#   search_manuals           rag_common.search_split       (RAG; not in the milestone list, but
+#   search_manuals           rag_common.search_best        (RAG; not in the milestone list, but
 #                                                           the agent needs documents to decide)
 #   flag_for_human           records an escalation reason  (no data lookup)
 #
@@ -450,7 +450,7 @@ def tool_find_technicians(ctx: AgentContext, asset_tag: str, certification: str 
 
 def tool_search_manuals(ctx: AgentContext, query: str, asset_code: str | None = None) -> dict:
     """Relevant manual / procedure sections (RAG): the class manual + plant-wide procedures."""
-    chunks = search_split(ctx.client, query, asset_code=asset_code)   # TODO H6: search_best
+    chunks = search_best(ctx.client, query, asset_code=asset_code)
     ctx.retrieved += chunks                              # kept for the citation guard (L5)
     return {"chunks": [{k: c[k] for k in ("file", "section", "pages", "text")} for c in chunks]}
 
