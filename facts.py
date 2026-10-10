@@ -12,6 +12,7 @@ from pathlib import Path
 
 # Folder that holds assets.json, telemetry.json, work_orders.json, ...
 from settings import MOCK_API   # data location comes from DATA_ROOT in .env
+from reliability import with_retries   # M7: retries + circuit breaker for the sensor feed
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -485,6 +486,7 @@ def _rows_in_window(rows: list[dict], start: int, end: int) -> list[dict]:
                   key=lambda r: r["hour_index"])
 
 
+@with_retries("sensor_feed")
 def get_telemetry_summary(lk: dict, asset_tag: str, asset_code: str, event_hour: float) -> dict:
     """Summary of the WINDOW_HOURS of telemetry before the event."""
     no_history = {"window": None, "hours": 0, "coverage": "none",

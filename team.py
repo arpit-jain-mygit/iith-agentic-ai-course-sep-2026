@@ -22,12 +22,15 @@ import logging
 
 from pydantic import BaseModel
 
+from tracing import observe
+
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
 # Agent 1: Log Intake
 # ---------------------------------------------------------------------------
+@observe(as_type="agent", name="log_intake_agent")
 def log_intake_agent(record_id: str) -> dict:
     """M1 LLM parse (confidence/conflicts, cross-checked against the registry) +
     L1 deterministic facts (authoritative) + M3 equipment memory."""
@@ -55,6 +58,7 @@ def log_intake_agent(record_id: str) -> dict:
 # ---------------------------------------------------------------------------
 # Agent 2: Manual RAG
 # ---------------------------------------------------------------------------
+@observe(as_type="agent", name="manual_rag_agent")
 def manual_rag_agent(prompt_facts: dict) -> list[dict]:
     """M4 hybrid+rerank retrieval: the asset's manual + plant-wide procedures (root-cause lookup)."""
     import llm_step
@@ -64,6 +68,7 @@ def manual_rag_agent(prompt_facts: dict) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Agent 3: Maintenance Recommendation
 # ---------------------------------------------------------------------------
+@observe(as_type="agent", name="maintenance_recommendation_agent")
 def maintenance_recommendation_agent(record_id: str, prompt_facts: dict, chunks: list[dict],
                                      facts: dict) -> dict:
     """L3/L4 LLM call, L5 citation guard, H5 groundedness, then P1-P4 (triage, parts, techs, guards)."""
@@ -92,6 +97,7 @@ def maintenance_recommendation_agent(record_id: str, prompt_facts: dict, chunks:
 # to reorder_point) lives here, in code - the tool itself just records
 # whatever quantity it is told (see mcp_server.py's docstring).
 # ---------------------------------------------------------------------------
+@observe(as_type="agent", name="procurement_agent")
 def procurement_agent(record_id: str, received_at: str, parts: dict) -> dict:
     """Raise a PO for every named part that needs restocking (idempotent per record_id+part)."""
     from mcp_server import call_tool_sync
@@ -154,6 +160,7 @@ def build_safety_review_prompt(decision: dict, evidence_chunks: list[dict]) -> s
     return f"RECOMMENDATION:\n{recommendation}\n\nDOCUMENTS:\n{docs_block}"
 
 
+@observe(as_type="agent", name="safety_reviewer_agent")
 def safety_reviewer_agent(decision: dict, chunks: list[dict]) -> dict:
     """Vets a safety-critical/permit job's actions against the cited safety documents."""
     if not (decision["safety_critical"] or decision["requires_permit"]):
@@ -173,6 +180,7 @@ def safety_reviewer_agent(decision: dict, chunks: list[dict]) -> dict:
 # ---------------------------------------------------------------------------
 # Run the team end to end
 # ---------------------------------------------------------------------------
+@observe(name="run_team", capture_input=True, capture_output=True)
 def run_team(record_id: str) -> dict:
     """Log Intake -> Manual RAG -> Recommendation -> Safety Review -> route -> Procurement."""
     import decide as D

@@ -30,6 +30,8 @@ from pathlib import Path
 from mcp.server.mcpserver import MCPServer
 
 import facts as F
+from reliability import with_retries       # M7: retries + circuit breaker for the ERP
+from tracing import observe
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +66,8 @@ def _po_id(reference: str, part_number: str) -> str:
 # Tools
 # ---------------------------------------------------------------------------
 @app.tool()
+@observe(as_type="tool", name="check_stock")
+@with_retries("erp")
 def check_stock(asset_tag: str, asset_code: str, received_at: str,
                 part_numbers: list[str] | None = None) -> dict:
     """Stock, reorder point, lead time and open POs for this asset class's parts
@@ -78,6 +82,8 @@ def check_stock(asset_tag: str, asset_code: str, received_at: str,
 
 
 @app.tool()
+@observe(as_type="tool", name="raise_purchase_order")
+@with_retries("erp")
 def raise_purchase_order(reference: str, part_number: str, quantity: int,
                          raised_on: str, raised_by: str = "procurement_agent") -> dict:
     """Create a PO for `quantity` units of `part_number`. `reference` is the

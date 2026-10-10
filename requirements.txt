@@ -10,3 +10,4 @@ tenacity          # needed by litellm's num_retries (retry on 429 / 503); not in
 langgraph                     # graph.py: M5 orchestrated workflow, state graph + conditional routing
 langgraph-checkpoint-sqlite   # graph.py: durable checkpointing (resume a paused/interrupted run)
 mcp[cli]                      # mcp_server.py: M6 mock inventory/ERP exposed as an MCP server
+langfuse                      # tracing.py: M7 tracing (no-ops cleanly without LANGFUSE_* keys)
