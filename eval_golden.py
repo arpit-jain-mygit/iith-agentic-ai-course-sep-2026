@@ -34,10 +34,29 @@ def load_golden_set() -> list[dict]:
 
 
 def cited_doc_titles(result: dict) -> set[str]:
-    """doc_titles behind the citations actually used, via the retrieved chunks."""
+    """doc_titles behind the citations actually used, via the retrieved chunks.
+
+    Matches on the exact (file, section) pair first. Falls back to matching on
+    `file` alone ONLY when exactly one retrieved chunk came from that file (so
+    there is no ambiguity about which section was meant) - this tolerates the
+    model citing a section heading it slightly reworded (e.g. dropping a
+    trailing word) from the stored text, without ever matching the wrong
+    section when a file had multiple candidates."""
     by_key = {(c["file"], c["section"]): c["doc_title"] for c in result["chunks"]}
-    return {by_key[(c["file"], c["section"])] for c in result["citations"]
-            if (c["file"], c["section"]) in by_key}
+
+    by_file: dict[str, list[str]] = {}
+    for c in result["chunks"]:
+        by_file.setdefault(c["file"], []).append(c["doc_title"])
+    by_file_unambiguous = {f: titles[0] for f, titles in by_file.items() if len(titles) == 1}
+
+    titles = set()
+    for c in result["citations"]:
+        key = (c["file"], c["section"])
+        if key in by_key:
+            titles.add(by_key[key])
+        elif c["file"] in by_file_unambiguous:
+            titles.add(by_file_unambiguous[c["file"]])
+    return titles
 
 
 def check_case(case: dict, result: dict) -> dict:

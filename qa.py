@@ -23,7 +23,7 @@ from pydantic import BaseModel
 import facts as F
 from intake import asset_catalogue, parse_text
 from llm_step import Citation, call_structured
-from rag_common import get_client, search_best
+from rag_common import PLANT_WIDE, get_client, search_best
 from tracing import observe
 
 logger = logging.getLogger(__name__)
@@ -145,15 +145,43 @@ def classify_route(answer: QAAnswer) -> str:
     return route
 
 
+# ---------------------------------------------------------------------------
+# Retrieval-breadth backstop (not prompt-based, applies to every question
+# uniformly): search_best() only reserves dedicated plant-wide slots when
+# asset_code resolves to a real class (sources = {"asset", "plant"}). When it
+# doesn't (asset_code=None - common here, since the M1 parser often can't
+# resolve a class-level mention), it falls back to ONE unified pool with NO
+# guaranteed plant-wide representation at all - an asset's own manual can
+# then win every slot and a plant-wide standard (Permit to Work, Lockout/
+# Tagout) never even enters the prompt. This always tops up with a few
+# genuinely plant-wide chunks (asset_code=PLANT_WIDE, same function, same
+# ranking), deduplicated against what was already retrieved.
+# ---------------------------------------------------------------------------
+PLANT_SUPPLEMENT_K = 3   # guaranteed minimum plant-wide chunks, every question (design choice)
+
+
+def _with_plant_wide_coverage(client, question: str, chunks: list[dict]) -> list[dict]:
+    """chunks + a guaranteed minimum of genuinely plant-wide chunks, deduplicated."""
+    have = {(c["file"], c["section"]) for c in chunks}
+    extra = search_best(client, question, asset_code=PLANT_WIDE, k_asset=0, k_plant=PLANT_SUPPLEMENT_K)
+    new = [c for c in extra if (c["file"], c["section"]) not in have]
+    if new:
+        logger.info("[STEP A / M4] plant-wide top-up: +%d chunk(s): %s", len(new),
+                   [c["doc_title"] for c in new])
+    return chunks + new
+
+
 @observe(name="answer_question", capture_input=True, capture_output=True)
 def answer_question(question: str) -> dict:
     """Retrieve + answer one free-text question, with a route classification."""
     logger.info("[answer_question] IN:  question=%r", question[:80])
     lk = F.load_lookups()
     code = _asset_code_hint(lk, question)
+    client = get_client()
 
     logger.info("[STEP A / M4] retrieve IN:  question=%r asset_code=%s", question[:80], code)
-    chunks = search_best(get_client(), question, asset_code=code)
+    chunks = search_best(client, question, asset_code=code)
+    chunks = _with_plant_wide_coverage(client, question, chunks)
     logger.info("[STEP A / M4] retrieve OUT: %d chunks", len(chunks))
     for c in chunks:
         logger.info("  [%s] %-55s | %-40s | %s", c.get("source", "?"), c["file"], c["section"],
