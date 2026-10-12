@@ -66,9 +66,14 @@ def run() -> dict:
         outcome = check_case(case, result)
         results.append(outcome)
         status = "PASS" if outcome["pass"] else "FAIL"
-        logger.info("%s %-20s route=%s%s%s", status, outcome["id"], outcome["got_route"],
+        route_part = (f"route={outcome['got_route']}" if outcome["route_ok"] else
+                     f"route: expected={outcome['expected_route']} got={outcome['got_route']}")
+        logger.info("%s %-20s %s%s%s", status, outcome["id"], route_part,
                    "" if outcome["cite_ok"] else f" missing_cites={outcome['missing_cites']}",
                    "" if outcome["guardrail_ok"] else f" VIOLATED={outcome['violated_phrases']}")
+        if not outcome["pass"]:
+            logger.info("  EXPECTED (golden): %s", case.get("expected") or "(no free-text description)")
+            logger.info("  GOT      (answer): %s", result["answer"])
         if i + 1 < len(cases):
             time.sleep(CASE_PAUSE_S)
 
