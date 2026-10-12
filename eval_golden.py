@@ -42,6 +42,11 @@ def cited_doc_titles(result: dict) -> set[str]:
 
 def check_case(case: dict, result: dict) -> dict:
     """route / must_cite / must_not_contain, each pass/fail, for one case."""
+    logger.info("[STEP C] check_case IN:  id=%s expected_route=%s must_cite=%s must_not_contain=%s "
+               "| got route=%s citations=%s", case["id"], case["expected_route"],
+               case.get("must_cite", []), case.get("must_not_contain", []),
+               result["route"], result["citations"])
+
     route_ok = result["route"] == case["expected_route"]
 
     titles = cited_doc_titles(result)
@@ -52,20 +57,28 @@ def check_case(case: dict, result: dict) -> dict:
     violated = [p for p in case.get("must_not_contain", []) if p.lower() in answer_lower]
     guardrail_ok = not violated
 
-    return {"id": case["id"], "category": case["category"], "pass": route_ok and cite_ok and guardrail_ok,
-            "route_ok": route_ok, "got_route": result["route"], "expected_route": case["expected_route"],
-            "cite_ok": cite_ok, "missing_cites": missing_cites,
-            "guardrail_ok": guardrail_ok, "violated_phrases": violated}
+    outcome = {"id": case["id"], "category": case["category"], "pass": route_ok and cite_ok and guardrail_ok,
+              "route_ok": route_ok, "got_route": result["route"], "expected_route": case["expected_route"],
+              "cite_ok": cite_ok, "missing_cites": missing_cites,
+              "guardrail_ok": guardrail_ok, "violated_phrases": violated}
+    logger.info("[STEP C] check_case OUT: %s", outcome)
+    return outcome
 
 
-def run() -> dict:
+def run(case_id: str | None = None) -> dict:
     cases = load_golden_set()
+    if case_id:
+        cases = [c for c in cases if c["id"] == case_id]
+        if not cases:
+            raise SystemExit(f"{case_id}: not found in {EVAL_PATH}")
     results = []
     for i, case in enumerate(cases):
+        logger.info("[STEP C] grading %s START", case["id"])
         result = answer_question(case["question"])
         outcome = check_case(case, result)
         results.append(outcome)
         status = "PASS" if outcome["pass"] else "FAIL"
+        logger.info("[STEP C] grading %s END: pass=%s", case["id"], outcome["pass"])
         route_part = (f"route={outcome['got_route']}" if outcome["route_ok"] else
                      f"route: expected={outcome['expected_route']} got={outcome['got_route']}")
         logger.info("%s %-20s %s%s%s", status, outcome["id"], route_part,
@@ -93,9 +106,18 @@ def run() -> dict:
 
 
 if __name__ == "__main__":
+    import argparse
     import json
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    summary = run()
+    # force=True: facts.py/intake.py call basicConfig() at import time, which otherwise wins first
+    # (logging.basicConfig is a no-op once the root logger already has a handler).
+    logging.basicConfig(level=logging.INFO, force=True,
+                        format="%(asctime)s %(levelname)s %(filename)s:%(funcName)s: %(message)s")
+    for noisy in ("LiteLLM", "litellm", "langfuse", "httpx", "httpcore"):   # third-party noise only
+        logging.getLogger(noisy).setLevel(logging.ERROR)
+    parser = argparse.ArgumentParser(description="M8: run the golden-set eval (all 20, or one case)")
+    parser.add_argument("case_id", nargs="?", help="e.g. PLANTGUARD-EV-901; omit to run all 20")
+    args = parser.parse_args()
+    summary = run(args.case_id)
     print(json.dumps({"total": summary["total"], "passed": summary["passed"],
                       "failures": [r["id"] for r in summary["failures"]],
                       "guardrail_violations": [r["id"] for r in summary["guardrail_violations"]]}, indent=2))

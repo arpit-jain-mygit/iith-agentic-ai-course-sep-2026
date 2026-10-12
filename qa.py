@@ -64,9 +64,13 @@ Rules:
 
 def _asset_code_hint(lk: dict, question: str) -> str | None:
     """Best-effort asset class for this question, via the M1 parser (no asset = search everything)."""
+    logger.info("[STEP A / M1] asset-hint IN:  question=%r", question[:80])
     parsed = parse_text(asset_catalogue(lk), "operator_report", question)
     asset = F.get_asset(lk, parsed.asset_tag) if parsed.asset_tag else None
-    return asset["asset_code"] if asset else None
+    code = asset["asset_code"] if asset else None
+    logger.info("[STEP A / M1] asset-hint OUT: asset_tag=%s confidence=%s -> asset_code=%s",
+               parsed.asset_tag, parsed.asset_confidence, code)
+    return code
 
 
 def build_qa_prompt(question: str, chunks: list[dict]) -> str:
@@ -78,37 +82,61 @@ def build_qa_prompt(question: str, chunks: list[dict]) -> str:
 
 def classify_route(answer: QAAnswer) -> str:
     """auto / human_review / refuse, from the answer's own verdict (no new LLM call)."""
+    logger.info("[STEP A2] classify_route IN:  can_answer=%s bypass=%s permit=%s action=%s",
+               answer.can_answer, answer.bypasses_safety_request, answer.requires_permit_or_loto,
+               answer.requests_action)
     if answer.bypasses_safety_request or answer.requires_permit_or_loto or answer.requests_action:
-        return "human_review"
-    if not answer.can_answer:
-        return "refuse"
-    return "auto"
+        route = "human_review"
+    elif not answer.can_answer:
+        route = "refuse"
+    else:
+        route = "auto"
+    logger.info("[STEP A2] classify_route OUT: route=%s", route)
+    return route
 
 
 @observe(name="answer_question", capture_input=True, capture_output=True)
 def answer_question(question: str) -> dict:
     """Retrieve + answer one free-text question, with a route classification."""
+    logger.info("[answer_question] IN:  question=%r", question[:80])
     lk = F.load_lookups()
     code = _asset_code_hint(lk, question)
-    chunks = search_best(get_client(), question, asset_code=code)
 
+    logger.info("[STEP A / M4] retrieve IN:  question=%r asset_code=%s", question[:80], code)
+    chunks = search_best(get_client(), question, asset_code=code)
+    logger.info("[STEP A / M4] retrieve OUT: %d chunks", len(chunks))
+    for c in chunks:
+        logger.info("  [%s] %-55s | %-40s | %s", c.get("source", "?"), c["file"], c["section"],
+                   c["doc_title"])
+
+    logger.info("[STEP B] answer IN:  question=%r + %d chunks", question[:80], len(chunks))
     answer = call_structured(QA_PROMPT, build_qa_prompt(question, chunks), QAAnswer)
+    logger.info("[STEP B] answer OUT: can_answer=%s bypass=%s permit=%s action=%s citations=%s answer=%r",
+               answer.can_answer, answer.bypasses_safety_request, answer.requires_permit_or_loto,
+               answer.requests_action, [c.model_dump() for c in answer.citations], answer.answer[:120])
+
     route = classify_route(answer)
-    logger.info("QA: route=%s can_answer=%s bypass=%s permit=%s action=%s", route, answer.can_answer,
-               answer.bypasses_safety_request, answer.requires_permit_or_loto, answer.requests_action)
-    return {"question": question, "answer": answer.answer,
-            "citations": [c.model_dump() for c in answer.citations],
-            "can_answer": answer.can_answer, "bypasses_safety_request": answer.bypasses_safety_request,
-            "requires_permit_or_loto": answer.requires_permit_or_loto,
-            "requests_action": answer.requests_action,
-            "route": route, "chunks": [{"file": c["file"], "doc_title": c["doc_title"],
-                                        "section": c["section"]} for c in chunks]}
+    result = {"question": question, "answer": answer.answer,
+             "citations": [c.model_dump() for c in answer.citations],
+             "can_answer": answer.can_answer, "bypasses_safety_request": answer.bypasses_safety_request,
+             "requires_permit_or_loto": answer.requires_permit_or_loto,
+             "requests_action": answer.requests_action,
+             "route": route, "chunks": [{"file": c["file"], "doc_title": c["doc_title"],
+                                         "section": c["section"]} for c in chunks]}
+    logger.info("[answer_question] OUT: route=%s can_answer=%s citations=%d",
+               result["route"], result["can_answer"], len(result["citations"]))
+    return result
 
 
 if __name__ == "__main__":
     import argparse
     import json
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # force=True: facts.py/intake.py call basicConfig() at import time, which otherwise wins first
+    # (logging.basicConfig is a no-op once the root logger already has a handler).
+    logging.basicConfig(level=logging.INFO, force=True,
+                        format="%(asctime)s %(levelname)s %(filename)s:%(funcName)s: %(message)s")
+    for noisy in ("LiteLLM", "litellm", "langfuse", "httpx", "httpcore"):   # third-party noise only
+        logging.getLogger(noisy).setLevel(logging.ERROR)
     parser = argparse.ArgumentParser(description="M8: ask a free-text maintenance question")
     parser.add_argument("question")
     args = parser.parse_args()
