@@ -50,7 +50,7 @@ lower-level (unit/integration) test cases will be added in a later section.
 
 | ID | Objective | Command | Expected |
 |---|---|---|---|
-| E2E-M6-01 | All 5 agents run end to end | `.venv/bin/python team.py <record_id>` | Output has `final`, `safety_review`, `procurement`, `intake_check` all populated |
+| E2E-M6-01 | All 5 agents run end to end | `.venv/bin/python agents.py <record_id>` | Output has `final`, `safety_review`, `procurement`, `intake_check` all populated |
 | E2E-M6-02 | Safety Reviewer fires only when warranted | Run on a non-safety-critical, non-permit event | `safety_review.reviewed` is `false` (no second LLM call) |
 | E2E-M6-03 | Procurement raises a PO for a real shortage | Run on an event whose `fault_parts` includes an out-of-stock part | `procurement.purchase_orders_raised` is non-empty; `po_id` starts `AGENT-PO-` |
 | E2E-M6-04 | Procurement is idempotent | Run the same record_id's team twice | Second run's PO has `"created": false`, same `po_id` as the first |
@@ -60,8 +60,8 @@ lower-level (unit/integration) test cases will be added in a later section.
 
 | ID | Objective | Command | Expected |
 |---|---|---|---|
-| E2E-M7-01 | Tracing degrades gracefully without keys | Run anything in `team.py` with `.env` unset for `LANGFUSE_*` | One `"Authentication error"` warning, pipeline still completes |
-| E2E-M7-02 | Tracing actually reports, with real keys | Set `LANGFUSE_PUBLIC_KEY`/`SECRET_KEY`, rerun `team.py` | A new trace named `run_team` appears in your LangFuse project, with 5 child spans |
+| E2E-M7-01 | Tracing degrades gracefully without keys | Run anything in `agents.py` with `.env` unset for `LANGFUSE_*` | One `"Authentication error"` warning, pipeline still completes |
+| E2E-M7-02 | Tracing actually reports, with real keys | Set `LANGFUSE_PUBLIC_KEY`/`SECRET_KEY`, rerun `agents.py` | A new trace named `run_team` appears in your LangFuse project, with 5 child spans |
 | E2E-M7-03 | Retries exhaust and raise, never return a silent default | (unit-level, but observable E2E) monkeypatch `get_telemetry_summary` to always fail, run `decide.py` | Pipeline crashes with `ServiceUnavailable`, not a quiet "no telemetry" result |
 
 ## M8 - Eval harness, hard-block guardrail, FastAPI
@@ -70,7 +70,7 @@ lower-level (unit/integration) test cases will be added in a later section.
 |---|---|---|---|
 | E2E-M8-01 | Full golden-set run reports per-category scores | `.venv/bin/python eval_golden.py` | Table logged for `guardrail`/`multi_hop`/`unanswerable`/`factual`; overall `%` printed |
 | E2E-M8-02 | A lockout-bypass request is refused, not complied with | `.venv/bin/python qa.py "...skip the paperwork..."` | `route: human_review`, `bypasses_safety_request: true`, answer refuses |
-| E2E-M8-03 | Procurement is withheld on a human_review team run | Run `team.py` on a flagged event with a part shortage | `procurement.purchase_orders_raised` is `[]`, `withheld_reason` present |
+| E2E-M8-03 | Procurement is withheld on a human_review team run | Run `agents.py` on a flagged event with a part shortage | `procurement.purchase_orders_raised` is `[]`, `withheld_reason` present |
 | E2E-M8-04 | `/triage` works over HTTP | `.venv/bin/uvicorn api:app` (separate terminal), then `curl -X POST http://127.0.0.1:8000/triage/PLANTGUARD-00000` | 200, full triage JSON |
 | E2E-M8-05 | `/triage` 404s cleanly on a bad id | `curl -X POST http://127.0.0.1:8000/triage/NOT-REAL` | 404, `{"detail": "...not found"}` |
 | E2E-M8-06 | `/status` reflects real system state | `curl http://127.0.0.1:8000/status` | `qdrant_connected: true`, `equipment_memories_stored` > 0, circuit breakers listed |

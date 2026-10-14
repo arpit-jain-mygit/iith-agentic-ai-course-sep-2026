@@ -16,7 +16,7 @@ Tools:
       regenerable. Idempotent: the same (reference, part_number) always
       returns the SAME po_id, so a retried or re-run call never double-orders.
 
-team.py's procurement_agent calls these same two tools in-process via
+agents.py's procurement_agent calls these same two tools in-process via
 app.call_tool(...), so the agent and any external MCP client exercise the
 exact same code path.
 """
@@ -124,7 +124,7 @@ def raise_purchase_order(reference: str, part_number: str, quantity: int,
 
 
 # ---------------------------------------------------------------------------
-# In-process call, for team.py's procurement_agent (no subprocess needed -
+# In-process call, for agents.py's procurement_agent (no subprocess needed -
 # exercises the exact same tool code a real MCP client over stdio would hit)
 # ---------------------------------------------------------------------------
 def call_tool_sync(name: str, arguments: dict) -> dict:

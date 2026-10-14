@@ -30,7 +30,7 @@ class AskRequest(BaseModel):
 def triage(record_id: str) -> dict:
     """Run the full 5-agent team (Log Intake -> Manual RAG -> Recommendation ->
     Safety Review -> Procurement) on one intake event."""
-    from team import run_team
+    from agents import run_team
     try:
         return run_team(record_id)
     except SystemExit as e:                               # facts.main's "not found" path

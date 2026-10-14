@@ -3,7 +3,7 @@
 ASCII overview of the full system (M1-M8), with step numbers matching the
 code's own `L1-L6`/`P1-P5`/`H1-H6` step labels. Steps 1-12 are the shared
 core pipeline; 13 onward is where the two orchestration layers
-(`graph.py` vs `team.py`) diverge, then re-converge at step 17 (the M3
+(`graph.py` vs `agents.py`) diverge, then re-converge at step 17 (the M3
 memory write).
 
 ```
@@ -80,7 +80,7 @@ memory write).
                            │ two orchestration layers (choose path)    │
                            ▼                                          ▼
            ┌───────────────────────────┐              ┌───────────────────────────────┐
-           │       graph.py (M5)        │              │          team.py (M6)          │
+           │       graph.py (M5)        │              │        agents.py (M6)        │
            │                            │              │                                 │
            │ STEP 13a: intake→lookup    │              │ STEP 13b: Log Intake (1) →      │
            │  →recommend→route node     │              │  Manual RAG (2) → Maintenance    │
@@ -133,7 +133,7 @@ memory write).
 │  ┌───────────┐        ┌────────────────┐        ┌─────────────────────────┐    │
 │  │  qa.py    │◀───────│ eval_golden.py │        │         api.py           │    │
 │  │ STEP A:   │ STEP B │ STEP C: 20     │        │       (FastAPI)          │    │
-│  │ retrieve  │ answer │ golden cases,  │        │ STEP X: POST /triage/{id}│────▶ team.py (step 13b)
+│  │ retrieve  │ answer │ golden cases,  │        │ STEP X: POST /triage/{id}│────▶ agents.py (step 13b)
 │  │ STEP A2:  │ (RAG + │ each checks    │        │ STEP Y: POST /ask ───────│────▶ qa.py (steps A-B)
 │  │ guardrail │ guard- │ route+must_    │        │ STEP Z: GET  /status      │    │
 │  │ classify  │ rail)  │ cite+must_not_ │        │  (Qdrant health, memory   │    │
@@ -187,7 +187,7 @@ Same system, laid out left-to-right by step order instead of nested boxes.
 └──────────────────────────────────────────────────┬┴────────────────────────┘
                                                       │
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  PATH B: team.py (M6) - 5 MANDATORY AGENTS (★ marks each one)                │
+│  PATH B: agents.py (M6) - 5 MANDATORY AGENTS (★ marks each one)             │
 │                                                                               │
 │  ┌──────────────┐   ┌──────────┐   ┌──────────┐   ┌──────────────────────┐ │
 │  │   STEP 13b    │──▶│ STEP 14  │──▶│ STEP 15  │──▶│       STEP 16          │ │
@@ -239,7 +239,7 @@ Same system, laid out left-to-right by step order instead of nested boxes.
        │
 ┌──────┴───────────────────────────────────────────────┐
 │                     api.py (FastAPI)                  │
-│  STEP X: POST /triage/{id}  ──▶ team.py (step 13b)    │
+│  STEP X: POST /triage/{id}  ──▶ agents.py (step 13b)    │
 │  STEP Y: POST /ask          ──▶ qa.py (steps A-B)      │
 │  STEP Z: GET  /status       ──▶ Qdrant health, memory  │
 │                                 count, POs, breakers    │
@@ -249,7 +249,7 @@ External services used across every step above: Gemini (via LiteLLM - all LLM
 calls + embeddings), Qdrant Cloud (vector search), LangFuse (optional tracing).
 ```
 
-★ = one of the 5 mandatory agents (PATH B / team.py, M6), named exactly as
+★ = one of the 5 mandatory agents (PATH B / agents.py, M6), named exactly as
 the spec's "Mandatory components" list:
 `AGENT 1` Log Intake Agent · `AGENT 2` Manual/SOP RAG Agent ·
 `AGENT 3` Maintenance Recommendation Agent · `AGENT 4` Safety Reviewer
@@ -266,7 +266,7 @@ and a human-approval interrupt instead of discrete named agents.
 | M3 | `memory.py` |
 | M4 | `rag_common.py`, `rag_ingest.py` |
 | M5 | `graph.py` |
-| M6 | `team.py`, `mcp_server.py` |
+| M6 | `agents.py`, `mcp_server.py` |
 | M7 | `tracing.py`, `reliability.py` |
 | M8 | `qa.py`, `eval_golden.py`, `api.py` |
 | Core (L1-L6, P1-P5, H5) | `facts.py`, `llm_step.py`, `decide.py` |
