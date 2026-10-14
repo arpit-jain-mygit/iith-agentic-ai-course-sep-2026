@@ -222,13 +222,18 @@ def answer_question(question: str) -> dict:
 if __name__ == "__main__":
     import argparse
     import json
+    parser = argparse.ArgumentParser(description="M8: ask a free-text maintenance question")
+    parser.add_argument("question")
+    parser.add_argument("--verbose", action="store_true",
+                        help="also show third-party library logs (LiteLLM, langfuse, httpx); "
+                             "quiet (this project's own log lines only) by default")
+    args = parser.parse_args()
+
     # force=True: facts.py/intake.py call basicConfig() at import time, which otherwise wins first
     # (logging.basicConfig is a no-op once the root logger already has a handler).
     logging.basicConfig(level=logging.INFO, force=True,
                         format="%(asctime)s %(levelname)s %(filename)s:%(funcName)s: %(message)s")
-    for noisy in ("LiteLLM", "litellm", "langfuse", "httpx", "httpcore"):   # third-party noise only
-        logging.getLogger(noisy).setLevel(logging.ERROR)
-    parser = argparse.ArgumentParser(description="M8: ask a free-text maintenance question")
-    parser.add_argument("question")
-    args = parser.parse_args()
+    if not args.verbose:
+        for noisy in ("LiteLLM", "litellm", "langfuse", "httpx", "httpcore"):   # third-party noise only
+            logging.getLogger(noisy).setLevel(logging.ERROR)
     print(json.dumps(answer_question(args.question), indent=2))

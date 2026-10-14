@@ -127,15 +127,20 @@ def run(case_id: str | None = None) -> dict:
 if __name__ == "__main__":
     import argparse
     import json
+    parser = argparse.ArgumentParser(description="M8: run the golden-set eval (all 20, or one case)")
+    parser.add_argument("case_id", nargs="?", help="e.g. PLANTGUARD-EV-901; omit to run all 20")
+    parser.add_argument("--verbose", action="store_true",
+                        help="also show third-party library logs (LiteLLM, langfuse, httpx); "
+                             "quiet (this project's own log lines only) by default")
+    args = parser.parse_args()
+
     # force=True: facts.py/intake.py call basicConfig() at import time, which otherwise wins first
     # (logging.basicConfig is a no-op once the root logger already has a handler).
     logging.basicConfig(level=logging.INFO, force=True,
                         format="%(asctime)s %(levelname)s %(filename)s:%(funcName)s: %(message)s")
-    for noisy in ("LiteLLM", "litellm", "langfuse", "httpx", "httpcore"):   # third-party noise only
-        logging.getLogger(noisy).setLevel(logging.ERROR)
-    parser = argparse.ArgumentParser(description="M8: run the golden-set eval (all 20, or one case)")
-    parser.add_argument("case_id", nargs="?", help="e.g. PLANTGUARD-EV-901; omit to run all 20")
-    args = parser.parse_args()
+    if not args.verbose:
+        for noisy in ("LiteLLM", "litellm", "langfuse", "httpx", "httpcore"):   # third-party noise only
+            logging.getLogger(noisy).setLevel(logging.ERROR)
     summary = run(args.case_id)
     print(json.dumps({"total": summary["total"], "passed": summary["passed"],
                       "failures": [r["id"] for r in summary["failures"]],
