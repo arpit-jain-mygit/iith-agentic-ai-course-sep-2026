@@ -16,7 +16,17 @@ import logging
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from rag_common import get_client    # importing this also checks DATA_ROOT (via settings.py)
+from settings import google_api_key
+
 logger = logging.getLogger(__name__)
+
+# Fail at process startup, not on the first request: a service that boots clean and then
+# 500s on every call (because a required key was never set) is worse than one that refuses
+# to start. This also opens a real connection to Qdrant, so a wrong/unreachable URL is
+# caught here too, not mid-request.
+google_api_key()
+get_client()
 
 app = FastAPI(title="PlantGuard",
              description="Predictive maintenance triage, Q&A and status dashboard.")

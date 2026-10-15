@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 import facts as F
 from rag_common import get_client, search_best
-from settings import llm_model            # LLM_MODEL comes from .env
+from settings import google_api_key, llm_model   # .env values
 
 MAX_ATTEMPTS = 2                          # one retry if the JSON fails validation
 API_RETRIES = 3                           # LiteLLM retries on temporary API errors (503 / 429)
@@ -165,7 +165,7 @@ def call_structured(system_prompt: str, user_prompt: str, schema: type[BaseModel
     validation, repair retry and API retries are written once.
     """
     import litellm
-    os.environ.setdefault("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
+    google_api_key()
 
     model = llm_model()
     logger.info("LLM: calling %s for %s", model, schema.__name__)
@@ -591,7 +591,7 @@ def final_answer_prompt(event, ctx: AgentContext) -> str:
 def run_agent(event, lk: dict, client, anchor) -> dict:
     """LLM + tools + loop -> validated LLMDecision, plus the tool trace."""
     import litellm
-    os.environ.setdefault("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
+    google_api_key()
     ctx = AgentContext(lk, client, anchor, event)
 
     messages = [{"role": "system", "content": AGENT_PROMPT},

@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 # To experiment (another model, another chunking), change COLLECTION too:
 # vectors from different models must never share a collection.
 # ---------------------------------------------------------------------------
-from settings import PDF_DIR   # data location comes from DATA_ROOT in .env
+from settings import PDF_DIR, google_api_key   # .env values
 COLLECTION = "plantguard_docs"
 EMBED_MODEL = "gemini/gemini-embedding-001"
 
@@ -69,7 +69,7 @@ def _cache_path(text: str) -> Path:
 def embed(texts: list[str]) -> list[list[float]]:
     """Vectors for texts, in the same order; uses the cache, calls the API only for new texts."""
     import litellm
-    os.environ.setdefault("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
+    google_api_key()
     CACHE_DIR.mkdir(exist_ok=True)
 
     # Unique texts not yet cached (dict.fromkeys removes duplicates, keeps order)
