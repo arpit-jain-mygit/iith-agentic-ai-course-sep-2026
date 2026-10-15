@@ -197,35 +197,61 @@ def maintenance_recommendation_agent(record_id: str, prompt_facts: dict, chunks:
 # ---------------------------------------------------------------------------
 # Agent 4: Procurement (NEW)
 #
-# IN SHORT: P2 (parts_check) already tells us which named parts are out of
-# stock or below reorder; this agent ACTS on that by raising a PO through the
-# MCP ERP server for each one. The quantity decision (bring on_hand back up
-# to reorder_point) lives here, in code - the tool itself just records
-# whatever quantity it is told (see mcp_server.py's docstring).
+# IN SHORT: P2 (parts_check) ran earlier in the pipeline and already flagged
+# which named parts are out of stock or below reorder; this agent re-verifies
+# each candidate against LIVE stock via the check_stock MCP tool before
+# spending money, since P2's view is a snapshot and this is the one agent
+# that actually commits a side effect (raising a PO). The quantity decision
+# (bring on_hand back up to reorder_point) lives here, in code - the
+# raise_purchase_order tool itself just records whatever quantity it is told
+# (see mcp_server.py's docstring).
 # ---------------------------------------------------------------------------
 @observe(as_type="agent", name="procurement_agent")
-def procurement_agent(record_id: str, received_at: str, parts: dict) -> dict:
-    """Raise a PO for every named part that needs restocking (idempotent per record_id+part)."""
+def procurement_agent(record_id: str, received_at: str, parts: dict,
+                      asset_tag: str, asset_code: str) -> dict:
+    """Raise a PO for every named part that still needs restocking after a live
+    check_stock re-verification (idempotent per record_id+part)."""
     from mcp_server import call_tool_sync
 
-    logger.info("***STEP 6.1 (non-LLM)*** evaluate parts | IN:  %s",
+    logger.info("***STEP 6.1 (non-LLM)*** evaluate parts (P2 snapshot) | IN:  %s",
                [(p["part_number"], p["status"], p["below_reorder"]) for p in parts["parts"]])
+    candidates = [p for p in parts["parts"] if p["status"] != "not_in_inventory"
+                 and (p["status"] == "out_of_stock" or p["below_reorder"])]
+    logger.info("***STEP 6.1 (non-LLM)*** evaluate parts (P2 snapshot) | OUT: %d of %d part(s) are "
+               "reorder candidates", len(candidates), len(parts["parts"]))
+
     raised = []
-    for p in parts["parts"]:
-        if p["status"] == "not_in_inventory":                     # can't reorder an unknown part
+    for p in candidates:
+        logger.info("***STEP 6.2 (non-LLM)*** check_stock re-verify | IN:  part=%s asset_tag=%s "
+                   "(P2 snapshot had on_hand=%s reorder_point=%s)",
+                   p["part_number"], asset_tag, p["on_hand"], p["reorder_point"])
+        live = call_tool_sync("check_stock", {
+            "asset_tag": asset_tag, "asset_code": asset_code,
+            "received_at": received_at, "part_numbers": [p["part_number"]],
+        })
+        live_part = next((lp for lp in live["parts"] if lp["part_number"] == p["part_number"]), None)
+        if live_part is None:
+            logger.info("***STEP 6.2 (non-LLM)*** check_stock re-verify | OUT: part not found live, "
+                       "skipping")
             continue
-        if p["status"] == "out_of_stock" or p["below_reorder"]:
-            qty = max(p["reorder_point"] - p["on_hand"], 1)        # bring on_hand back up to reorder_point
-            po = call_tool_sync("raise_purchase_order", {
-                "reference": record_id, "part_number": p["part_number"],
-                "quantity": qty, "raised_on": received_at[:10],
-            })
-            raised.append(po)
-            logger.info("***STEP 6.2 (non-LLM)*** raise PO | IN:  part=%s on_hand=%s reorder_point=%s -> qty=%d "
-                       "| OUT: po_id=%s (idempotent on record_id+part_number)",
-                       p["part_number"], p["on_hand"], p["reorder_point"], qty, po.get("po_id"))
-    logger.info("***STEP 6.1 (non-LLM)*** evaluate parts | OUT: %d of %d part(s) needed reordering -> %d PO(s) raised",
-               len(raised), len(parts["parts"]), len(raised))
+        logger.info("***STEP 6.2 (non-LLM)*** check_stock re-verify | OUT: on_hand=%s reorder_point=%s "
+                   "out_of_stock=%s below_reorder=%s", live_part["on_hand"], live_part["reorder_point"],
+                   live_part["out_of_stock"], live_part["below_reorder"])
+
+        if not live_part["out_of_stock"] and not live_part["below_reorder"]:
+            logger.info("***STEP 6.3 (non-LLM)*** raise PO | SKIPPED: stock changed since triage, "
+                       "%s no longer needs reordering", p["part_number"])
+            continue
+
+        qty = max(live_part["reorder_point"] - live_part["on_hand"], 1)   # bring on_hand back up to reorder_point
+        po = call_tool_sync("raise_purchase_order", {
+            "reference": record_id, "part_number": p["part_number"],
+            "quantity": qty, "raised_on": received_at[:10],
+        })
+        raised.append(po)
+        logger.info("***STEP 6.3 (non-LLM)*** raise PO | IN:  part=%s on_hand=%s reorder_point=%s -> qty=%d "
+                   "| OUT: po_id=%s (idempotent on record_id+part_number)",
+                   p["part_number"], live_part["on_hand"], live_part["reorder_point"], qty, po.get("po_id"))
     return {"purchase_orders_raised": raised}
 
 
@@ -365,7 +391,8 @@ def run_team(record_id: str) -> dict:
     logger.info("***STEP 6 (non-LLM)*** AGENT 5 Procurement | IN:  route=%s parts=%s", routing["route"],
                [p["part_number"] for p in rec["parts"]["parts"]])
     if routing["route"] == "auto":
-        procurement = procurement_agent(record_id, intake["facts"]["received_at"], rec["parts"])
+        procurement = procurement_agent(record_id, intake["facts"]["received_at"], rec["parts"],
+                                        ic["asset_tag"], ic["asset_code"])
         logger.info("***STEP 6 (non-LLM)*** AGENT 5 Procurement | OUT: purchase_orders_raised=%s",
                    [po.get("po_id") for po in procurement["purchase_orders_raised"]])
     else:
